@@ -1,0 +1,50 @@
+[workspace]
+members = [".", "crates/ofm-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Londopy"]
+repository = "https://github.com/Londopy/ofm"
+
+[workspace.dependencies]
+ofm-core = { path = "crates/ofm-core" }
+
+[package]
+name = "ofm"
+description = "Open FM sound card modem with a VARA FM compatible host interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ofm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.8", features = ["derive"] }
+cpal = "0.18.2"
+ctrlc = { version = "3.5.3", features = ["termination"] }
+hex = "0.4.3"
+hidapi = "2.6.7"
+ofm-core.workspace = true
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json"] }
+self-replace = "1.5.1"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
+serialport = "4.10.1"
+sha2 = "0.11.1"
+toml = "1.2.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[build-dependencies]
+winresource = "0.1.34"
