@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ofm - MSI installer (WiX Toolset v7)
+
+  Built by the release workflow from installer\, once per architecture:
+    wix build -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext
+              -d Version=1.2.3 -d BinDir=..\target\x86_64-pc-windows-msvc\release
+              -o ofm-1.2.3-x64.msi ofm.wxs
+  The workflow writes installer\license.rtf first (both license texts; WixUI
+  shows the license from an RTF file). Its "Install WiX" step has the one-time
+  setup commands; XML comments can't hold the double hyphens they use.
+
+  Install scope: per-user by default (no UAC, %LOCALAPPDATA%\Programs\ofm,
+  same folder as the Inno setup.exe). IT admins install machine-wide with:
+    msiexec /i ofm-<ver>-x64.msi ALLUSERS=2 MSIINSTALLPERUSER=""
+  Optional msiexec properties: DESKTOPSHORTCUT=0 (skip the desktop shortcut),
+  ADDTOPATH=0 (leave PATH alone).
+
+  Don't install the MSI and the setup.exe side by side; they share a folder.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!-- the workflow passes -d Version=<numeric version>; MSI versions must be
+       plain numbers, so prerelease suffixes like -rc1 are stripped first -->
+  <?ifndef Version ?>
+    <?define Version = "0.0.0" ?>
+  <?endif?>
+  <?ifndef BinDir ?>
+    <?define BinDir = "..\target\release" ?>
+  <?endif?>
+
+  <!-- Id replaces the old UpgradeCode GUID: any newer MSI with the same Id
+       upgrades an older one in place. Never reuse this Id for a different app. -->
+  <Package Id="Londopy.ofm"
+           Name="ofm"
+           Manufacturer="Londopy"
+           Version="$(var.Version)"
+           Language="1033"
+           Scope="perUserOrMachine">
+
+    <!-- same-version reinstall works (handy for testing); downgrades are refused -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of ofm is already installed." />
+
+    <!-- one msi file, no loose .cab next to it -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Add/Remove Programs: icon and links. The Id keeps its .ico extension
+         because shortcuts only take icons named .ico or .exe. -->
+    <Icon Id="ofm.ico" SourceFile="..\assets\ofm.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ofm.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Londopy/ofm" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Londopy/ofm/issues" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/Londopy/ofm/releases" />
+
+    <!-- options for msiexec; same defaults as the Inno tasks (desktop shortcut
+         and PATH on). Secure so they survive into the elevated part of an
+         all-users install. -->
+    <Property Id="DESKTOPSHORTCUT" Value="1" Secure="yes" />
+    <Property Id="ADDTOPATH" Value="1" Secure="yes" />
+
+    <!-- UI: license page + Install button, then a "Launch" checkbox (checked).
+         WixShellExec can't pass arguments, so it opens the Start menu shortcut,
+         which runs ofm in a terminal that stays open. -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch ofm" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[ProgramMenuFolder]ofm.lnk" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction"
+               Value="Wix4ShellExec_$(sys.BUILDARCHSHORT)"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
+
+    <!-- No util:CloseApplication here. ofm is a console program with no window
+         to send a close message to, and terminating it in the middle of a
+         transmission can leave the radio keyed. Windows Installer's own Restart
+         Manager support lists a running ofm in its files-in-use dialog instead. -->
+
+    <Feature Id="Main" Title="ofm" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="PathEntry" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="CleanupConfig" />
+    </Feature>
+
+    <!-- per-user: %LOCALAPPDATA%\Programs\ofm
+         all users: C:\Program Files\ofm (Program Files (x86) for the x86 msi) -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="ofm">
+
+        <Component Id="MainExecutable">
+          <File Id="MainExe" Source="$(var.BinDir)\ofm.exe" KeyPath="yes" />
+        </Component>
+
+        <!-- puts the folder on PATH so a terminal can run "ofm"; removed on
+             uninstall. System="no" writes the user's PATH, which for an
+             all-users install is the PATH of whoever ran it. -->
+        <Component Id="PathEntry" Condition="ADDTOPATH = 1">
+          <Environment Id="PathEntry" Name="PATH" Value="[INSTALLFOLDER]"
+                       Part="last" Action="set" System="no" Permanent="no" />
+          <RegistryValue Root="HKMU" Key="Software\Londopy\ofm"
+                         Name="PathEntry" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- shortcuts sit directly in Start, no subfolder. They run cmd /k so the
+         terminal stays open if ofm exits with an error; the doubled quotes
+         survive cmd's quote stripping. HKMU = HKCU for a per-user install, HKLM
+         for all users; the value is just the keypath. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StartMenuShortcut" Name="ofm" Target="[SystemFolder]cmd.exe"
+                  Arguments="/k &quot;&quot;[#MainExe]&quot;&quot;" Icon="ofm.ico"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="Open FM sound card modem with a VARA FM compatible host interface" />
+        <RegistryValue Root="HKMU" Key="Software\Londopy\ofm"
+                       Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Condition="DESKTOPSHORTCUT = 1">
+        <Shortcut Id="DesktopShortcut" Name="ofm" Target="[SystemFolder]cmd.exe"
+                  Arguments="/k &quot;&quot;[#MainExe]&quot;&quot;" Icon="ofm.ico"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Description="Open FM sound card modem with a VARA FM compatible host interface" />
+        <RegistryValue Root="HKMU" Key="Software\Londopy\ofm"
+                       Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- uninstall removes %APPDATA%\ofm (config.toml), matching the Inno
+         [UninstallDelete] entry -->
+    <StandardDirectory Id="AppDataFolder">
+      <Directory Id="CONFIGFOLDER" Name="ofm">
+        <Component Id="CleanupConfig">
+          <RemoveFile Id="RemoveConfigFiles" Name="*" On="uninstall" />
+          <RemoveFolder Id="RemoveConfigFolder" On="uninstall" />
+          <RegistryValue Root="HKMU" Key="Software\Londopy\ofm"
+                         Name="CleanupConfig" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>
