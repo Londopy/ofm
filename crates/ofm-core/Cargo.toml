@@ -1,0 +1,13 @@
+[package]
+name = "ofm-core"
+description = "Waveform, LDPC, framing and ARQ for the ofm FM modem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+crc32fast = "1.5.5"
+num-complex = "0.4.6"
+rustfft = "6.4.1"
