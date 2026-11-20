@@ -168,7 +168,7 @@ Both directions share the channel half duplex. The station whose turn it is send
 
 Frame sequence numbers start at 1 on each side and go up by one, modulo 256, on every Ack or Data frame sent, retransmissions and bare Acks included. A sender keeps the chunk layouts of its last 8 frames so that a bitmap can be matched to the frame it describes.
 
-A frame that carries data must be answered. A bare Ack is not answered unless the receiver has data of its own. The sender retransmits every chunk that has not been acknowledged ahead of new data. Because chunks are identified by byte offset, a retransmission may be cut differently at a new level. A frame holds at most 40 codewords. The count is chosen so that the frame takes about `1 + 3 * level / 9` seconds, which is 1 s at level 0 and 4 s at level 9.
+A frame that carries data must be answered. A bare Ack is not answered unless the receiver has data of its own. The sender retransmits every chunk that has not been acknowledged ahead of new data. Because chunks are identified by byte offset, a retransmission may be cut differently at a new level. A frame holds at most 40 codewords. The count is chosen so that the frame takes about `1 + 7 * level / 9` seconds, which is 1 s at level 0 and 8 s at level 9.
 
 An answer goes out 120 ms after the frame it answers has ended. Anything else a station sends during a link (new data after a quiet spell, a retry) waits until no audio is heard on the channel.
 

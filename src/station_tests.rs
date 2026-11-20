@@ -337,3 +337,60 @@ fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
     assert!((3_000..3_600).contains(&off_at), "released at {off_at}");
     assert!(st.transmitting.is_none() && st.unkey_at.is_none());
 }
+
+// the spec asks for 6 kbps on Narrow on a cabled bench; this is the simulated version
+#[test]
+fn narrow_link_carries_about_6_kbps_one_way() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let base = 28_000 + (std::process::id() % 1000) as u16 * 4;
+    let air = Arc::new(Mutex::new([VecDeque::new(), VecDeque::new()]));
+    let mut chan = ChannelConfig::narrow();
+    chan.snr_db = Some(30.0);
+    chan.clock_ppm = 50.0;
+    chan.keyup_ms = 30.0;
+    let mk = |port, side, chan: ChannelConfig, air| {
+        let mut st = station(port, side, air, chan);
+        st.cfg.profile = Profile::Narrow;
+        st.cfg.txdelay_ms = 200;
+        st.rx = Receiver::new(Profile::Narrow);
+        st.link = Link::new(
+            LinkConfig {
+                profile: Profile::Narrow,
+                txdelay_ms: 200,
+                max_retries: 10,
+            },
+            side as u64 + 5,
+        );
+        st
+    };
+    let mut a = mk(base, 0, chan.clone(), air.clone());
+    chan.clock_ppm = -50.0;
+    chan.seed = 2;
+    let mut b = mk(base + 2, 1, chan, air);
+    let clock = Arc::new(AtomicU64::new(0));
+    let c2 = clock.clone();
+    let pat = thread::spawn(move || {
+        let mut pa = Client::connect(base);
+        let mut pb = Client::connect(base + 2);
+        pa.send("MYCALL N0CALL\r");
+        pb.send("MYCALL W1AW-10\rLISTEN ON\r");
+        pb.wait_for(|l| l == "REGISTERED W1AW-10", 5);
+        pa.send("CONNECT N0CALL W1AW-10\r");
+        pb.wait_for(|l| l.starts_with("CONNECTED "), 60);
+        let data = pattern(30_000, 1);
+        let t0 = c2.load(Ordering::SeqCst);
+        pa.data.write_all(&data).unwrap();
+        assert_eq!(pb.read_data(data.len(), 600), data);
+        let bps = data.len() as u64 * 8000 / (c2.load(Ordering::SeqCst) - t0);
+        assert!(bps >= 5_800, "{bps} bps");
+    });
+    let mut now = 0u64;
+    while !pat.is_finished() {
+        now += 10;
+        clock.store(now, Ordering::SeqCst);
+        a.step(now);
+        b.step(now);
+        thread::sleep(Duration::from_micros(300));
+    }
+    pat.join().unwrap();
+}

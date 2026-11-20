@@ -534,7 +534,7 @@ impl Link {
 
     fn transmit(&mut self, now: u64) {
         let profile = self.cfg.profile;
-        let budget_for = |level: u8| (1.0 + 3.0 * level as f32 / 9.0) * FS as f32;
+        let budget_for = |level: u8| (1.0 + 7.0 * level as f32 / 9.0) * FS as f32;
         match &mut self.state {
             State::Connecting {
                 mycall,

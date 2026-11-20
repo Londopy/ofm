@@ -414,7 +414,9 @@ impl Receiver {
 
             let tau = -slope * NFFT as f32 / TAU;
             if tau.abs() > 3.0 {
-                shift = (shift + tau.round() as isize).clamp(-60, 60);
+                // the buffer holds MARGIN samples past the frame's end, and no more
+                let m = MARGIN as isize;
+                shift = (shift + tau.round() as isize).clamp(-m, m);
             }
         }
         let mean_var = if nsyms > 0 {
