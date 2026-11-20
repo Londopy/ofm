@@ -122,6 +122,7 @@ fn station(
         cwid: true,
         max_retries: 10,
         kiss_level: 3,
+        name: String::new(),
     };
     let audio = SimAudio {
         side,
@@ -312,6 +313,7 @@ fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
         cwid: false,
         max_retries: 10,
         kiss_level: 3,
+        name: String::new(),
     };
     let io = StationIo {
         audio: Box::new(StuckAudio),

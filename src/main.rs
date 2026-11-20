@@ -4,12 +4,14 @@ mod config;
 mod host;
 mod kissport;
 mod ptt;
+mod sim;
 mod station;
 mod updater;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ProfileName, PttMethod};
+use ofm_core::chansim::{Channel, ChannelConfig};
 use ofm_core::modem::Profile;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +39,8 @@ enum Cmd {
     Devices,
     /// Send a level-setting tone and show the receive level.
     Calibrate(RunArgs),
+    /// Run two modems joined by a simulated radio link, to try a client without radios.
+    Sim(SimArgs),
     /// Check GitHub Releases for a newer ofm and install it after asking.
     Update,
 }
@@ -57,6 +61,18 @@ struct RunArgs {
     /// Output device, matched by part of its name.
     #[arg(long)]
     output: Option<String>,
+}
+
+#[derive(clap::Args, Clone)]
+struct SimArgs {
+    /// Command port of the first modem; the second modem's ports are 100 higher.
+    #[arg(long, default_value_t = 8300)]
+    port: u16,
+    #[arg(long, value_enum)]
+    profile: Option<ProfileArg>,
+    /// Channel SNR in dB, measured over the whole audio band.
+    #[arg(long, default_value_t = 30.0)]
+    snr: f32,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -118,25 +134,24 @@ fn stop_flag() -> Result<Arc<AtomicBool>> {
     Ok(stop)
 }
 
-fn run(cfg: Config) -> Result<()> {
-    let stop = stop_flag()?;
-    let (audio, audio_ok): (Box<dyn station::Audio>, bool) =
-        match audio::SoundCard::open(cfg.audio.input.as_deref(), cfg.audio.output.as_deref()) {
-            Ok(card) => (Box::new(card), true),
-            Err(e) => {
-                eprintln!("no sound card: {e:#}");
-                (Box::new(audio::NoAudio), false)
-            }
-        };
-    let ptt = open_ptt(&cfg)?;
+struct Setup {
+    audio: Box<dyn station::Audio>,
+    audio_ok: bool,
+    ptt: Box<dyn ptt::Ptt>,
+    port: u16,
+    kiss_port: u16,
+    name: String,
+}
 
+fn start_station(cfg: &Config, setup: Setup) -> Result<station::Station> {
+    let port = setup.port;
     let (host_tx, host_rx) = channel();
-    let (cmd, data) = host::serve(cfg.host.port, host_tx)
-        .with_context(|| format!("opening ports {} and {}", cfg.host.port, cfg.host.port + 1))?;
+    let (cmd, data) = host::serve(port, host_tx)
+        .with_context(|| format!("opening ports {} and {}", port, port + 1))?;
     let kiss = if cfg.kiss.enabled {
         let (tx, rx) = channel();
-        let clients = kissport::serve(cfg.kiss.port, tx)
-            .with_context(|| format!("opening KISS port {}", cfg.kiss.port))?;
+        let clients = kissport::serve(setup.kiss_port, tx)
+            .with_context(|| format!("opening KISS port {}", setup.kiss_port))?;
         Some(station::Kiss {
             inbox: rx,
             out: Box::new(clients),
@@ -145,18 +160,58 @@ fn run(cfg: Config) -> Result<()> {
         None
     };
     eprintln!(
-        "ofm {} {} profile, command port {}, data port {}{}",
+        "{}ofm {} {} profile, command port {}, data port {}{}",
+        setup.name,
         env!("CARGO_PKG_VERSION"),
-        profile(&cfg).name(),
-        cfg.host.port,
-        cfg.host.port + 1,
+        profile(cfg).name(),
+        port,
+        port + 1,
         if cfg.kiss.enabled {
-            format!(", KISS port {}", cfg.kiss.port)
+            format!(", KISS port {}", setup.kiss_port)
         } else {
             String::new()
         }
     );
+    let station_cfg = station::StationConfig {
+        profile: profile(cfg),
+        txdelay_ms: cfg.radio.txdelay_ms,
+        papr_db: cfg.radio.papr_db,
+        tx_gain: cfg.audio.tx_gain,
+        cwid: cfg.radio.cwid,
+        max_retries: cfg.host.max_retries,
+        kiss_level: cfg.kiss.level,
+        name: setup.name,
+    };
+    let io = station::StationIo {
+        audio: setup.audio,
+        audio_ok: setup.audio_ok,
+        ptt: setup.ptt,
+        host: host_rx,
+        cmd,
+        data,
+        kiss,
+    };
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos() as u64
+        ^ u64::from(port);
+    Ok(station::Station::new(station_cfg, io, seed))
+}
 
+// steps every station until ctrl-c; dropping them on the way out releases PTT
+fn drive(mut stations: Vec<station::Station>, stop: &AtomicBool) {
+    let start = Instant::now();
+    while !stop.load(Ordering::SeqCst) {
+        let now = start.elapsed().as_millis() as u64;
+        for st in &mut stations {
+            st.step(now);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    eprintln!("stopping");
+}
+
+fn check_for_update(cfg: &Config) {
     if cfg.updater.check_on_start {
         std::thread::spawn(|| {
             if let Ok(Some(u)) = updater::check() {
@@ -167,35 +222,67 @@ fn run(cfg: Config) -> Result<()> {
             }
         });
     }
+}
 
-    let station_cfg = station::StationConfig {
-        profile: profile(&cfg),
-        txdelay_ms: cfg.radio.txdelay_ms,
-        papr_db: cfg.radio.papr_db,
-        tx_gain: cfg.audio.tx_gain,
-        cwid: cfg.radio.cwid,
-        max_retries: cfg.host.max_retries,
-        kiss_level: cfg.kiss.level,
+fn run(cfg: Config) -> Result<()> {
+    let stop = stop_flag()?;
+    let (audio, audio_ok): (Box<dyn station::Audio>, bool) =
+        match audio::SoundCard::open(cfg.audio.input.as_deref(), cfg.audio.output.as_deref()) {
+            Ok(card) => (Box::new(card), true),
+            Err(e) => {
+                eprintln!("no sound card: {e:#}");
+                (Box::new(audio::NoAudio), false)
+            }
+        };
+    let st = start_station(
+        &cfg,
+        Setup {
+            audio,
+            audio_ok,
+            ptt: open_ptt(&cfg)?,
+            port: cfg.host.port,
+            kiss_port: cfg.kiss.port,
+            name: String::new(),
+        },
+    )?;
+    check_for_update(&cfg);
+    drive(vec![st], &stop);
+    Ok(())
+}
+
+fn sim(cfg: Config, args: &SimArgs) -> Result<()> {
+    let stop = stop_flag()?;
+    let mut chan = match profile(&cfg) {
+        Profile::Narrow => ChannelConfig::narrow(),
+        Profile::Wide => ChannelConfig::wide(),
     };
-    let io = station::StationIo {
-        audio,
-        audio_ok,
-        ptt,
-        host: host_rx,
-        cmd,
-        data,
-        kiss,
+    chan.snr_db = Some(args.snr);
+    // the two sound cards drift apart a little, and each radio loses the start of its keyup
+    chan.clock_ppm = 40.0;
+    chan.keyup_ms = 30.0;
+    let back = ChannelConfig {
+        clock_ppm: -40.0,
+        seed: 2,
+        ..chan.clone()
     };
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_nanos() as u64;
-    let mut st = station::Station::new(station_cfg, io, seed);
-    let start = Instant::now();
-    while !stop.load(Ordering::SeqCst) {
-        st.step(start.elapsed().as_millis() as u64);
-        std::thread::sleep(Duration::from_millis(5));
+    let (a, b) = sim::pair(Channel::new(chan), Channel::new(back));
+    let mut stations = Vec::new();
+    for (audio, offset) in [(a, 0), (b, 100)] {
+        let port = args.port + offset;
+        stations.push(start_station(
+            &cfg,
+            Setup {
+                audio: Box::new(audio),
+                audio_ok: true,
+                ptt: Box::new(ptt::External),
+                port,
+                kiss_port: cfg.kiss.port + offset,
+                name: format!("[{port}] "),
+            },
+        )?);
     }
-    eprintln!("stopping");
+    eprintln!("simulated radio link at {} dB SNR; ctrl-c stops", args.snr);
+    drive(stations, &stop);
     Ok(())
 }
 
@@ -230,6 +317,15 @@ fn main() -> Result<()> {
             let p = profile(&cfg);
             let stop = stop_flag()?;
             calibrate::run(&mut cfg, p, ptt, &stop)
+        }
+        Some(Cmd::Sim(args)) => {
+            let mut cfg = Config::load()?;
+            let profile_only = RunArgs {
+                profile: args.profile,
+                ..RunArgs::default()
+            };
+            apply(&mut cfg, &profile_only);
+            sim(cfg, &args)
         }
         Some(Cmd::Run(args)) => {
             let mut cfg = Config::load()?;

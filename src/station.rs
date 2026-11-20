@@ -37,6 +37,8 @@ pub struct StationConfig {
     pub max_retries: u32,
     /// Level used for connectionless frames from the KISS port.
     pub kiss_level: u8,
+    /// Put before each line this station logs; empty when there is only one.
+    pub name: String,
 }
 
 /// Write side of the KISS clients.
@@ -62,6 +64,7 @@ pub struct Station {
     transmitting: Option<Keyed>,
     // a PTT release failed; try again at this time
     unkey_at: Option<u64>,
+    logged_rate: Option<String>,
     mycalls: Vec<String>,
     busy: bool,
     last_alive: u64,
@@ -118,6 +121,7 @@ impl Station {
             cw_queue: VecDeque::new(),
             transmitting: None,
             unkey_at: None,
+            logged_rate: None,
             mycalls: Vec::new(),
             busy: false,
             last_alive: 0,
@@ -297,7 +301,23 @@ impl Station {
                 return;
             }
         };
+        if self.worth_logging(&line) {
+            eprintln!("{}{line}", self.cfg.name);
+        }
         self.cmd.line(&line);
+    }
+
+    // link changes, not the per-frame chatter; a speed only when it changes
+    fn worth_logging(&mut self, line: &str) -> bool {
+        if line.starts_with("BITRATE") {
+            let changed = self.logged_rate.as_deref() != Some(line);
+            self.logged_rate = Some(line.to_string());
+            return changed;
+        }
+        if line == "DISCONNECTED" {
+            self.logged_rate = None;
+        }
+        !line.starts_with("BUFFER") && !line.starts_with("SN ")
     }
 
     fn frames_audio(&self, frames: &[(Header, Vec<Chunk>)]) -> Vec<f32> {

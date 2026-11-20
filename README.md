@@ -131,6 +131,24 @@ starts and prints a line if a newer version is out; set `check_on_start = false`
 
 All of this mirrors how Pat drives VARA FM, but none of it has been tried over the air yet.
 
+While it runs, ofm prints a line to the terminal for each link event: a connect, a disconnect,
+a change of speed level, or an input device that has stopped sending audio.
+
+## Try it without radios
+
+`ofm sim` runs two modems in one process, joined by a simulated FM radio link in real time.
+The first modem takes Pat on ports 8300 and 8301 and the second on 8400 and 8401, so two Pat
+instances (or Pat and another VARA FM client) can hold a whole session with no radio or sound
+card:
+
+```
+ofm sim --profile narrow --snr 25
+```
+
+The simulated link has the profile's filtering and pre-emphasis tilt, noise at the SNR you
+give, a small sound card clock difference and some keyup loss. `--port` moves both pairs of
+ports.
+
 ## Commands
 
 | Command | What it does |
@@ -138,9 +156,11 @@ All of this mirrors how Pat drives VARA FM, but none of it has been tried over t
 | `ofm` or `ofm run` | Starts the modem. `--port 8300` sets the command port (data is the next port up), `--kiss-port 8310` the KISS port, `--profile narrow\|wide` the speed profile, and `--input`/`--output` the audio devices. |
 | `ofm devices` | Lists the audio devices. |
 | `ofm calibrate` | Sends a steady tone and shows the receive level. |
+| `ofm sim` | Runs two modems joined by a simulated radio link, on ports 8300 and 8400. |
 | `ofm update` | Checks GitHub Releases for a newer ofm and installs it after you type y. |
 
 The KISS-over-TCP port sends frames without ARQ, for broadcast tools rather than Winlink.
+Ctrl-C stops ofm and releases PTT first, even in the middle of a transmission.
 
 ## Profiles and speed
 
