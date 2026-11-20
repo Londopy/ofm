@@ -65,7 +65,7 @@ pub struct Station {
     transmitting: Option<Keyed>,
     // a PTT release failed; try again at this time
     unkey_at: Option<u64>,
-    logged_rate: Option<String>,
+    last_logged: String,
     // last time the input device gave us any audio, and whether we said it went quiet
     last_input: u64,
     input_lost: bool,
@@ -125,7 +125,7 @@ impl Station {
             cw_queue: VecDeque::new(),
             transmitting: None,
             unkey_at: None,
-            logged_rate: None,
+            last_logged: String::new(),
             last_input: 0,
             input_lost: false,
             mycalls: Vec::new(),
@@ -335,17 +335,14 @@ impl Station {
         self.cmd.line(&line);
     }
 
-    // link changes, not the per-frame chatter; a speed only when it changes
+    // link changes, not the per-frame chatter, and nothing twice in a row (the speed is
+    // reported after every frame, and a DISCONNECT after the link closed is answered again)
     fn worth_logging(&mut self, line: &str) -> bool {
-        if line.starts_with("BITRATE") {
-            let changed = self.logged_rate.as_deref() != Some(line);
-            self.logged_rate = Some(line.to_string());
-            return changed;
+        if line.starts_with("BUFFER") || line.starts_with("SN ") || self.last_logged == line {
+            return false;
         }
-        if line == "DISCONNECTED" {
-            self.logged_rate = None;
-        }
-        !line.starts_with("BUFFER") && !line.starts_with("SN ")
+        self.last_logged = line.to_string();
+        true
     }
 
     fn frames_audio(&self, frames: &[(Header, Vec<Chunk>)]) -> Vec<f32> {
