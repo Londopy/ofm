@@ -15,9 +15,10 @@ other ofm stations.
 ## Status
 
 ofm is early work and has not been tested on the air yet. It has been tested in a channel
-simulator and between two instances over a virtual audio cable. The waveform, framing and
-link protocol are documented in full in [docs/waveform.md](docs/waveform.md), but the format
-is not frozen yet, so run the same ofm version at both ends of a link.
+simulator, between two instances over a virtual audio cable, and with real Pat (1.0.1) holding
+Winlink P2P sessions in both directions through [`ofm sim`](#try-it-without-radios). The
+waveform, framing and link protocol are documented in full in [docs/waveform.md](docs/waveform.md),
+but the format is not frozen yet, so run the same ofm version at both ends of a link.
 
 ## Install
 
@@ -167,14 +168,14 @@ middle of a transmission.
 
 | Profile | Radio connection | Passband | Top level, raw | Measured over a virtual cable |
 |---|---|---|---|---|
-| Narrow | mic/speaker, or the 1200-baud data jack | about 560 to 2690 Hz | 8.1 kbps | 5.3 kbps |
-| Wide | the flat 9600-baud discriminator port | about 310 to 4750 Hz | 17.2 kbps | 12.3 to 13.0 kbps |
+| Narrow | mic/speaker, or the 1200-baud data jack | about 560 to 2690 Hz | 8.1 kbps | 6.0 kbps |
+| Wide | the flat 9600-baud discriminator port | about 310 to 4750 Hz | 17.2 kbps | 12.0 kbps |
 
 ofm adapts its speed to the link across ten levels, from about 400 bps (Narrow) or 860 bps
-(Wide) up to the top level. "Measured" is the net transfer rate of a two-way exchange between
-two ofm instances in real time over VB-Audio Virtual Cable, with 200 ms TXDELAY and turnarounds
-included. Real radios add noise, filtering and slower keyup, so expect less on the air; nothing
-has been measured there yet. [docs/curves.md](docs/curves.md) has error rate and throughput
+(Wide) up to the top level. "Measured" is the net rate of a 100 KB one-way transfer between two
+ofm instances in real time over VB-Audio Virtual Cable, timed from just after the connect, with
+200 ms TXDELAY, headers, acknowledgements and turnarounds all included. Real radios add noise,
+filtering and slower keyup, so expect less on the air; nothing has been measured there yet. [docs/curves.md](docs/curves.md) has error rate and throughput
 for every level in the channel simulator.
 
 ## Configuration
