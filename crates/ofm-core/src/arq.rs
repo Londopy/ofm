@@ -642,7 +642,7 @@ impl Link {
         };
         match (&mut self.state, h.kind) {
             (State::Connecting { peer, crossed, .. }, Kind::Connect)
-                if peer.eq_ignore_ascii_case(&h.src) =>
+                if peer.eq_ignore_ascii_case(&h.src) && h.profile == self.cfg.profile =>
             {
                 // both ends dialled at once; a listening station gives way if its call sorts
                 // first, or once the other side has shown it will not

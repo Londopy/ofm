@@ -612,3 +612,75 @@ fn two_stations_dialling_each_other_end_up_in_one_link() {
         assert_eq!(links[0], links[1], "{listen:?}");
     }
 }
+
+fn connect_from(src: &str, dst: &str) -> RxFrame {
+    let mut header = Header::new(Kind::Connect, Profile::Wide, src, dst);
+    header.body[0..4].copy_from_slice(&7u32.to_le_bytes());
+    RxFrame {
+        header,
+        chunks: Vec::new(),
+        snr_db: 20.0,
+    }
+}
+
+fn dialling(call: &str, peer: &str, listen: bool) -> Link {
+    let mut link = Link::new(CFG, 3);
+    link.set_mycalls(vec![call.to_string()]);
+    link.set_listen(listen);
+    link.connect(0, call, peer);
+    std::iter::from_fn(|| link.poll()).for_each(drop);
+    link
+}
+
+fn drained(link: &mut Link) -> Vec<Out> {
+    std::iter::from_fn(|| link.poll()).collect()
+}
+
+fn accepts(out: &[Out]) -> bool {
+    out.iter()
+        .any(|o| matches!(o, Out::Transmit(f) if f[0].0.kind == Kind::Accept))
+}
+
+#[test]
+fn a_listening_station_that_sorts_first_answers_the_other_dialler_at_once() {
+    let mut link = dialling("N0CALL", "W1AW-10", true);
+    link.on_frame(0, &connect_from("W1AW-10", "N0CALL"));
+    let out = drained(&mut link);
+    assert_eq!(
+        out[..3],
+        [
+            Out::Host(HostEvent::CancelPending),
+            Out::Host(HostEvent::Disconnected),
+            Out::Host(HostEvent::Pending),
+        ]
+    );
+    assert!(accepts(&out), "{out:?}");
+}
+
+#[test]
+fn a_listening_station_that_sorts_last_waits_for_a_second_connect() {
+    let mut link = dialling("W1AW-10", "N0CALL", true);
+    link.on_frame(0, &connect_from("N0CALL", "W1AW-10"));
+    assert!(drained(&mut link).is_empty());
+    link.on_frame(10, &connect_from("N0CALL", "W1AW-10"));
+    assert!(accepts(&drained(&mut link)));
+}
+
+#[test]
+fn a_station_that_is_not_listening_keeps_dialling() {
+    let mut link = dialling("N0CALL", "W1AW-10", false);
+    for t in 0..3 {
+        link.on_frame(t, &connect_from("W1AW-10", "N0CALL"));
+    }
+    assert!(drained(&mut link).is_empty());
+    assert!(matches!(link.state, State::Connecting { .. }));
+}
+
+#[test]
+fn the_order_rule_ignores_the_case_a_call_was_registered_in() {
+    // frames carry upper case calls, so a call registered in lower case still has to sort the
+    // way the other station sees it
+    let mut link = dialling("n0call", "W1AW-10", true);
+    link.on_frame(0, &connect_from("W1AW-10", "n0call"));
+    assert!(accepts(&drained(&mut link)));
+}

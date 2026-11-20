@@ -289,3 +289,44 @@ fn hiss_after_digital_silence_stops_counting_as_a_signal() {
     }
     assert!(!rx.energy());
 }
+
+#[test]
+fn a_full_length_top_level_frame_tracks_a_300_ppm_clock_offset() {
+    // 37 codewords at level 9 is the longest frame the link sends on Narrow, about 8 s
+    for ppm in [300.0, -300.0] {
+        let mut cfg = ChannelConfig::narrow();
+        cfg.snr_db = Some(30.0);
+        cfg.clock_ppm = ppm;
+        let (good, snr) = run(Profile::Narrow, 9, 37, Some(cfg));
+        assert_eq!(good, 37, "{ppm} ppm, snr {snr}");
+    }
+}
+
+#[test]
+fn heavy_clock_drift_does_not_read_past_the_buffer() {
+    let mut h = Header::new(Kind::Data, Profile::Narrow, "N0CALL", "W1AW");
+    h.level = 9;
+    let mut audio = lead_in(150);
+    audio.extend(build_frame(&h, &payload(&LEVELS[9], 37, 9), 9.0));
+    let nominal_end = 7_000 + audio.len();
+    let mut cfg = ChannelConfig::narrow();
+    cfg.snr_db = Some(40.0);
+    cfg.clock_ppm = 600.0;
+    let mut padded = vec![0.0; 7_000];
+    padded.extend(Channel::new(cfg).transmit(&audio));
+    padded.extend(std::iter::repeat_n(0.0, 20_000));
+    // one sample at a time around the end of the frame, so the buffer is never longer than
+    // what the receiver waits for before it decodes
+    let (head, rest) = padded.split_at(nominal_end - 600);
+    let (near, tail) = rest.split_at(1_500);
+    let mut rx = Receiver::new(Profile::Narrow);
+    for block in head.chunks(480) {
+        rx.push(block);
+    }
+    for s in near {
+        rx.push(&[*s]);
+    }
+    for block in tail.chunks(480) {
+        rx.push(block);
+    }
+}

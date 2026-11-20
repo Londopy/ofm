@@ -151,7 +151,7 @@ The caller reports the link to its host when the Accept arrives; the callee repo
 
 When the callee of a link gets a Connect from its caller with the same session number, the Accept was lost, and it sends the Accept again. Any other Connect from the peer of a link means the peer dropped the old link and dialled again: the old link is ended and the Connect is handled as new. A station in a link answers a Connect from anyone else with Reject.
 
-If two stations dial each other at the same time, each hears the other's Connect while it is still dialling. A station that is listening gives up its own dial and answers as the callee when its callsign sorts first (compared in upper case), or when it has already let one such Connect from that peer pass. A station that is not listening keeps dialling.
+If two stations dial each other at the same time, each hears the other's Connect while it is still dialling. A station that is listening gives up its own dial and answers as the callee when its callsign sorts first (compared in upper case), or when it has already let one such Connect from that peer pass. A station that is not listening keeps dialling. The host of the station that gives way sees its own dial fail (CANCELPENDING, DISCONNECTED) and then the incoming link (PENDING, CONNECTED), so only a host that is also accepting incoming links ends up connected.
 
 ### Data and acknowledgement
 
@@ -170,7 +170,7 @@ Both directions share the channel half duplex. The station whose turn it is send
 
 Frame sequence numbers start at 1 on each side and go up by one, modulo 256, on every Ack or Data frame sent, retransmissions and bare Acks included. A sender keeps the chunk layouts of its last 8 frames so that a bitmap can be matched to the frame it describes.
 
-A frame that carries data must be answered. A bare Ack is not answered unless the receiver has data of its own. The sender retransmits every chunk that has not been acknowledged ahead of new data. Because chunks are identified by byte offset, a retransmission may be cut differently at a new level. A frame holds at most 40 codewords. The count is chosen so that the frame takes about `1 + 7 * level / 9` seconds, which is 1 s at level 0 and 8 s at level 9.
+A frame that carries data must be answered. A bare Ack is not answered unless the receiver has data of its own. The sender retransmits every chunk that has not been acknowledged ahead of new data. Because chunks are identified by byte offset, a retransmission may be cut differently at a new level. A frame holds at most 40 codewords. The count is chosen so that the frame takes about `1 + 7 * level / 9` seconds, which is 1 s at level 0 and 8 s at level 9 on Narrow. On Wide the top levels reach the 40-codeword limit first, at about 4 s.
 
 An answer goes out 120 ms after the frame it answers has ended. Anything else a station sends during a link (new data after a quiet spell, a retry) waits until no audio is heard on the channel.
 
