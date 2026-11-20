@@ -8,7 +8,6 @@ use crate::station::Audio;
 use anyhow::Result;
 use ofm_core::modem::{build_frame, Chunk, Header, Kind, Profile, FS, LEVELS};
 use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
@@ -40,12 +39,7 @@ fn dbfs(x: f32) -> f32 {
     20.0 * x.max(1e-6).log10()
 }
 
-pub fn run(
-    cfg: &mut Config,
-    profile: Profile,
-    mut ptt: Box<dyn Ptt>,
-    stop: &AtomicBool,
-) -> Result<()> {
+pub fn run(cfg: &mut Config, profile: Profile, mut ptt: Box<dyn Ptt>) -> Result<()> {
     let mut card = SoundCard::open(cfg.audio.input.as_deref(), cfg.audio.output.as_deref())?;
     let peak = modem_peak(profile, cfg.radio.papr_db);
     println!("t = transmit tone on/off, + / - = tx gain 1 dB, s = save, q = quit (then Enter)");
@@ -67,7 +61,7 @@ pub fn run(
     let mut phase = 0usize;
     let mut level = 0.0f32;
     loop {
-        if stop.load(Ordering::SeqCst) {
+        if crate::stop::requested() {
             if keyed_at.is_some() {
                 ptt.set(false)?;
             }

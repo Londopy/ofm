@@ -160,7 +160,8 @@ ports.
 | `ofm update` | Checks GitHub Releases for a newer ofm and installs it after you type y. |
 
 The KISS-over-TCP port sends frames without ARQ, for broadcast tools rather than Winlink.
-Ctrl-C stops ofm and releases PTT first, even in the middle of a transmission.
+Ctrl-C, or closing the window ofm runs in, stops it and releases PTT first, even in the
+middle of a transmission.
 
 ## Profiles and speed
 

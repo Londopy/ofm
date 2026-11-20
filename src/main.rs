@@ -6,6 +6,7 @@ mod kissport;
 mod ptt;
 mod sim;
 mod station;
+mod stop;
 mod updater;
 
 use anyhow::{Context, Result};
@@ -14,9 +15,7 @@ use config::{Config, ProfileName, PttMethod};
 use ofm_core::chansim::{Channel, ChannelConfig};
 use ofm_core::modem::Profile;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -120,20 +119,6 @@ fn open_ptt(cfg: &Config) -> Result<Box<dyn ptt::Ptt>> {
     })
 }
 
-// set on ctrl-c (and SIGTERM or SIGHUP on Linux) so the loops can unkey and return
-fn stop_flag() -> Result<Arc<AtomicBool>> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let flag = stop.clone();
-    ctrlc::set_handler(move || {
-        // a second press means the loop is stuck; leave anyway
-        if flag.swap(true, Ordering::SeqCst) {
-            std::process::exit(130);
-        }
-    })
-    .context("installing the ctrl-c handler")?;
-    Ok(stop)
-}
-
 struct Setup {
     audio: Box<dyn station::Audio>,
     audio_ok: bool,
@@ -199,9 +184,9 @@ fn start_station(cfg: &Config, setup: Setup) -> Result<station::Station> {
 }
 
 // steps every station until ctrl-c; dropping them on the way out releases PTT
-fn drive(mut stations: Vec<station::Station>, stop: &AtomicBool) {
+fn drive(mut stations: Vec<station::Station>) {
     let start = Instant::now();
-    while !stop.load(Ordering::SeqCst) {
+    while !stop::requested() {
         let now = start.elapsed().as_millis() as u64;
         for st in &mut stations {
             st.step(now);
@@ -225,7 +210,6 @@ fn check_for_update(cfg: &Config) {
 }
 
 fn run(cfg: Config) -> Result<()> {
-    let stop = stop_flag()?;
     let (audio, audio_ok): (Box<dyn station::Audio>, bool) =
         match audio::SoundCard::open(cfg.audio.input.as_deref(), cfg.audio.output.as_deref()) {
             Ok(card) => (Box::new(card), true),
@@ -246,12 +230,11 @@ fn run(cfg: Config) -> Result<()> {
         },
     )?;
     check_for_update(&cfg);
-    drive(vec![st], &stop);
+    drive(vec![st]);
     Ok(())
 }
 
 fn sim(cfg: Config, args: &SimArgs) -> Result<()> {
-    let stop = stop_flag()?;
     let mut chan = match profile(&cfg) {
         Profile::Narrow => ChannelConfig::narrow(),
         Profile::Wide => ChannelConfig::wide(),
@@ -282,7 +265,7 @@ fn sim(cfg: Config, args: &SimArgs) -> Result<()> {
         )?);
     }
     eprintln!("simulated radio link at {} dB SNR; ctrl-c stops", args.snr);
-    drive(stations, &stop);
+    drive(stations);
     Ok(())
 }
 
@@ -305,37 +288,40 @@ fn update() -> Result<()> {
     Ok(())
 }
 
+// runs a command that can key the radio; ctrl-c or closing the console stops it, and its
+// stations are dropped (releasing PTT) before windows is allowed to end the process
+fn keying(command: impl FnOnce() -> Result<()>) -> Result<()> {
+    stop::install()?;
+    let result = command();
+    stop::finished();
+    result
+}
+
+fn load(args: &RunArgs) -> Result<Config> {
+    let mut cfg = Config::load()?;
+    apply(&mut cfg, args);
+    Ok(cfg)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Cmd::Devices) => audio::list(),
         Some(Cmd::Update) => update(),
-        Some(Cmd::Calibrate(args)) => {
-            let mut cfg = Config::load()?;
-            apply(&mut cfg, &args);
+        Some(Cmd::Calibrate(args)) => keying(|| {
+            let mut cfg = load(&args)?;
             let ptt = open_ptt(&cfg)?;
             let p = profile(&cfg);
-            let stop = stop_flag()?;
-            calibrate::run(&mut cfg, p, ptt, &stop)
-        }
-        Some(Cmd::Sim(args)) => {
-            let mut cfg = Config::load()?;
+            calibrate::run(&mut cfg, p, ptt)
+        }),
+        Some(Cmd::Sim(args)) => keying(|| {
             let profile_only = RunArgs {
                 profile: args.profile,
                 ..RunArgs::default()
             };
-            apply(&mut cfg, &profile_only);
-            sim(cfg, &args)
-        }
-        Some(Cmd::Run(args)) => {
-            let mut cfg = Config::load()?;
-            apply(&mut cfg, &args);
-            run(cfg)
-        }
-        None => {
-            let mut cfg = Config::load()?;
-            apply(&mut cfg, &cli.run);
-            run(cfg)
-        }
+            sim(load(&profile_only)?, &args)
+        }),
+        Some(Cmd::Run(args)) => keying(|| run(load(&args)?)),
+        None => keying(|| run(load(&cli.run)?)),
     }
 }
