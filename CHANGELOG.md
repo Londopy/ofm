@@ -8,6 +8,8 @@ what appears on its GitHub release page. Validated in CI by
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-19
+
 ### Added
 
 - `ofm` (or `ofm run`) starts the modem with a VARA FM compatible host interface: commands on
@@ -20,9 +22,13 @@ what appears on its GitHub release page. Validated in CI by
   throughput for every speed level in the channel simulator in `docs/curves.md`.
 - `ofm devices` lists the audio devices, and `ofm calibrate` sends a steady tone and shows the
   receive level, for setting deviation.
+- `ofm sim` runs two modems joined by a simulated radio link, on ports 8300 and 8400, so Pat
+  can hold a whole Winlink session with no radio or sound card.
 - PTT from the client (Pat with rigctld) or VOX, or keyed by ofm itself through serial RTS or
-  DTR, a CM108 GPIO, or rigctld (`method` under `[ptt]`). Ctrl-C releases PTT before ofm
-  exits.
+  DTR, a CM108 GPIO, or rigctld (`method` under `[ptt]`). Ctrl-C, or closing ofm's window,
+  releases PTT before ofm exits.
+- A line in the terminal for each connect, disconnect and speed change, and a warning when the
+  input device stops sending audio.
 - `ofm update` checks GitHub Releases for a newer version. After you type y it downloads it,
   checks its SHA-256 against the release's `SHA256SUMS.txt` and replaces itself. The modem also
   says when a newer version is out as it starts (`check_on_start` under `[updater]`).
@@ -33,3 +39,4 @@ what appears on its GitHub release page. Validated in CI by
   each. Plus a Linux x86_64 build.
 
 [Unreleased]: https://github.com/Londopy/ofm/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Londopy/ofm/releases/tag/v0.1.0
