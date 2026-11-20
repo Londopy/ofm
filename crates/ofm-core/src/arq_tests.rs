@@ -575,3 +575,40 @@ fn endless_audio_on_the_channel_does_not_freeze_a_link() {
     air.sides[1].got.clear();
     transfer(&mut air, 600, 0);
 }
+
+fn crossed_dial(listen: [bool; 2]) -> Air {
+    let mut air = Air::new();
+    for (side, on) in air.sides.iter_mut().zip(listen) {
+        side.link.set_listen(on);
+    }
+    air.sides[0].link.connect(0, "N0CALL", "W1AW-10");
+    air.sides[1].link.connect(0, "W1AW-10", "N0CALL");
+    air.run_until(120, |a| {
+        a.sides.iter().all(|s| {
+            s.events
+                .iter()
+                .any(|e| matches!(e, HostEvent::Connected { .. }))
+        })
+    });
+    air
+}
+
+#[test]
+fn two_stations_dialling_each_other_end_up_in_one_link() {
+    for listen in [[true, true], [false, true], [true, false]] {
+        let air = crossed_dial(listen);
+        let links: Vec<_> = air
+            .sides
+            .iter()
+            .map(|s| {
+                s.events
+                    .iter()
+                    .filter(|e| matches!(e, HostEvent::Connected { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(links[0].len(), 1, "{listen:?} {links:?}");
+        assert_eq!(links[0], links[1], "{listen:?}");
+    }
+}

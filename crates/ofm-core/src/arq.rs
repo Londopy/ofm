@@ -257,6 +257,8 @@ enum State {
         tries: u32,
         turn: Turn,
         nonce: u32,
+        // the peer is dialling us too, and we let its Connect pass once
+        crossed: bool,
     },
     Connected(Box<Session>),
     Disconnecting {
@@ -334,6 +336,7 @@ impl Link {
             tries: 0,
             turn: Turn::Ours(now),
             nonce,
+            crossed: false,
         };
     }
 
@@ -638,6 +641,19 @@ impl Link {
             return;
         };
         match (&mut self.state, h.kind) {
+            (State::Connecting { peer, crossed, .. }, Kind::Connect)
+                if peer.eq_ignore_ascii_case(&h.src) =>
+            {
+                // both ends dialled at once; a listening station gives way if its call sorts
+                // first, or once the other side has shown it will not
+                if self.listen && (me.to_ascii_uppercase() < h.src.to_ascii_uppercase() || *crossed)
+                {
+                    self.drop_link();
+                    self.on_frame(now, f);
+                } else {
+                    *crossed = true;
+                }
+            }
             (State::Idle, Kind::Connect) if self.listen && h.profile == self.cfg.profile => {
                 self.host(HostEvent::Pending);
                 self.open(now, me, h.src.clone(), false, f.snr_db);

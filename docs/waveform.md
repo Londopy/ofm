@@ -151,6 +151,8 @@ The caller reports the link to its host when the Accept arrives; the callee repo
 
 When the callee of a link gets a Connect from its caller with the same session number, the Accept was lost, and it sends the Accept again. Any other Connect from the peer of a link means the peer dropped the old link and dialled again: the old link is ended and the Connect is handled as new. A station in a link answers a Connect from anyone else with Reject.
 
+If two stations dial each other at the same time, each hears the other's Connect while it is still dialling. A station that is listening gives up its own dial and answers as the callee when its callsign sorts first (compared in upper case), or when it has already let one such Connect from that peer pass. A station that is not listening keeps dialling.
+
 ### Data and acknowledgement
 
 Both directions share the channel half duplex. The station whose turn it is sends one frame, which may contain:
