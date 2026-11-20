@@ -14,6 +14,7 @@ const CW_TONE: f32 = 800.0;
 // past the end of the audio, PTT is dropped even if the output never says it finished
 const TX_SLACK_MS: u64 = 2000;
 const UNKEY_RETRY_MS: u64 = 1000;
+const INPUT_LOST_MS: u64 = 3000;
 // a CW ID still waiting for a quiet channel after this long is dropped
 const CW_EXPIRE_MS: u64 = 30_000;
 
@@ -65,6 +66,9 @@ pub struct Station {
     // a PTT release failed; try again at this time
     unkey_at: Option<u64>,
     logged_rate: Option<String>,
+    // last time the input device gave us any audio, and whether we said it went quiet
+    last_input: u64,
+    input_lost: bool,
     mycalls: Vec<String>,
     busy: bool,
     last_alive: u64,
@@ -122,6 +126,8 @@ impl Station {
             transmitting: None,
             unkey_at: None,
             logged_rate: None,
+            last_input: 0,
+            input_lost: false,
             mycalls: Vec::new(),
             busy: false,
             last_alive: 0,
@@ -148,6 +154,7 @@ impl Station {
             self.unkey(now);
         }
         let heard = self.audio.capture();
+        self.watch_input(now, heard.is_empty());
         match &self.transmitting {
             Some(k) if !self.audio.playing() || now >= k.until => {
                 if self.audio.playing() {
@@ -254,6 +261,27 @@ impl Station {
             }
             Command::Compression | Command::Public | Command::Ignored => self.cmd.line("OK"),
             Command::Wrong => self.cmd.line("WRONG"),
+        }
+    }
+
+    // a sound card that stops delivering audio makes the modem deaf without any error
+    fn watch_input(&mut self, now: u64, empty: bool) {
+        if !self.audio_ok {
+            return;
+        }
+        if !empty {
+            if self.input_lost {
+                eprintln!("{}audio from the input device is back", self.cfg.name);
+                self.input_lost = false;
+            }
+            self.last_input = now;
+        } else if !self.input_lost && now >= self.last_input + INPUT_LOST_MS {
+            eprintln!(
+                "{}no audio from the input device for {} s; check that it is still plugged in",
+                self.cfg.name,
+                INPUT_LOST_MS / 1000
+            );
+            self.input_lost = true;
         }
     }
 
