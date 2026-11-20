@@ -147,8 +147,12 @@ ofm sim --profile narrow --snr 25
 ```
 
 The simulated link has the profile's filtering and pre-emphasis tilt, noise at the SNR you
-give, a small sound card clock difference and some keyup loss. `--port` moves both pairs of
-ports.
+give, a small sound card clock difference and some keyup loss. The modems' KISS ports are 8310
+and 8410, and `--port` moves all of them. ofm sim never sends `PTT ON` to the client, so a Pat
+set up to key a radio through rigctld leaves it alone.
+
+Pat asks before an over-the-air Winlink account activation when it cannot confirm your account;
+for a P2P test between two Pat instances, answer `c` to go on.
 
 ## Commands
 

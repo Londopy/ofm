@@ -40,6 +40,9 @@ pub struct StationConfig {
     pub kiss_level: u8,
     /// Put before each line this station logs; empty when there is only one.
     pub name: String,
+    /// Tell the host PTT ON and PTT OFF. Off in `ofm sim`, where a client set up to key a
+    /// real radio on those lines would transmit every simulated frame.
+    pub ptt_lines: bool,
 }
 
 /// Write side of the KISS clients.
@@ -158,11 +161,16 @@ impl Station {
         match &self.transmitting {
             Some(k) if !self.audio.playing() || now >= k.until => {
                 if self.audio.playing() {
-                    eprintln!("audio output stopped mid transmission; dropping PTT");
+                    eprintln!(
+                        "{}audio output stopped mid transmission; dropping PTT",
+                        self.cfg.name
+                    );
                 }
                 let from_link = k.from_link;
                 self.unkey(now);
-                self.cmd.line("PTT OFF");
+                if self.cfg.ptt_lines {
+                    self.cmd.line("PTT OFF");
+                }
                 self.transmitting = None;
                 // whatever we captured while keyed was our own signal
                 self.rx.clear();
@@ -289,7 +297,7 @@ impl Station {
         match self.ptt.set(false) {
             Ok(()) => self.unkey_at = None,
             Err(e) => {
-                eprintln!("ptt off failed, trying again: {e}");
+                eprintln!("{}ptt off failed, trying again: {e}", self.cfg.name);
                 self.unkey_at = Some(now + UNKEY_RETRY_MS);
             }
         }
@@ -370,7 +378,8 @@ impl Station {
                     self.tx_queue.push_back((audio, false));
                 }
                 None => eprintln!(
-                    "kiss frame of {} bytes is too big for one frame",
+                    "{}kiss frame of {} bytes is too big for one frame",
+                    self.cfg.name,
                     payload.len()
                 ),
             }
@@ -399,10 +408,12 @@ impl Station {
             return;
         };
         if let Err(e) = self.ptt.set(true) {
-            eprintln!("ptt on failed: {e}");
+            eprintln!("{}ptt on failed: {e}", self.cfg.name);
         }
         self.unkey_at = None;
-        self.cmd.line("PTT ON");
+        if self.cfg.ptt_lines {
+            self.cmd.line("PTT ON");
+        }
         let until = now + (audio.len() * 1000 / FS) as u64 + TX_SLACK_MS;
         let gain = self.cfg.tx_gain;
         self.audio.play(
@@ -420,7 +431,7 @@ impl Drop for Station {
     fn drop(&mut self) {
         if self.transmitting.is_some() || self.unkey_at.is_some() {
             if let Err(e) = self.ptt.set(false) {
-                eprintln!("ptt off failed on exit: {e}");
+                eprintln!("{}ptt off failed on exit: {e}", self.cfg.name);
             }
         }
     }

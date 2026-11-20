@@ -123,6 +123,7 @@ fn station(
         max_retries: 10,
         kiss_level: 3,
         name: String::new(),
+        ptt_lines: true,
     };
     let audio = SimAudio {
         side,
@@ -314,6 +315,7 @@ fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
         max_retries: 10,
         kiss_level: 3,
         name: String::new(),
+        ptt_lines: true,
     };
     let io = StationIo {
         audio: Box::new(StuckAudio),
@@ -340,7 +342,7 @@ fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
     assert!(st.transmitting.is_none() && st.unkey_at.is_none());
 }
 
-// the spec asks for 6 kbps on Narrow on a cabled bench; this is the simulated version
+// the first release aims for 6 kbps one way on Narrow; this is the simulated version
 #[test]
 fn narrow_link_carries_about_6_kbps_one_way() {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -395,4 +397,86 @@ fn narrow_link_carries_about_6_kbps_one_way() {
         thread::sleep(Duration::from_micros(300));
     }
     pat.join().unwrap();
+}
+
+// an input device that can be switched off, as when a USB sound card is pulled
+struct Switchable(Arc<std::sync::atomic::AtomicBool>);
+
+impl Audio for Switchable {
+    fn capture(&mut self) -> Vec<f32> {
+        if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            vec![0.0; BLOCK]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn play(&mut self, _samples: Vec<f32>) {}
+
+    fn playing(&self) -> bool {
+        false
+    }
+}
+
+// no host sockets, so nothing here can collide with another test's ports
+fn bare_station(audio: Switchable) -> Station {
+    let (_tx, rx) = channel();
+    let cfg = StationConfig {
+        profile: Profile::Narrow,
+        txdelay_ms: 150,
+        papr_db: 9.0,
+        tx_gain: 1.0,
+        cwid: false,
+        max_retries: 10,
+        kiss_level: 3,
+        name: String::new(),
+        ptt_lines: true,
+    };
+    let io = StationIo {
+        audio: Box::new(audio),
+        audio_ok: true,
+        ptt: Box::new(External),
+        host: rx,
+        cmd: Port::default(),
+        data: Port::default(),
+        kiss: None,
+    };
+    Station::new(cfg, io, 1)
+}
+
+#[test]
+fn a_silent_input_device_is_noticed_after_three_seconds_and_again_when_it_returns() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let on = Arc::new(AtomicBool::new(true));
+    let mut st = bare_station(Switchable(on.clone()));
+    for now in (10..1_000).step_by(10) {
+        st.step(now);
+    }
+    on.store(false, Ordering::SeqCst);
+    for now in (1_000..3_900).step_by(10) {
+        st.step(now);
+    }
+    assert!(!st.input_lost, "warned after under 3 s of silence");
+    for now in (3_900..4_100).step_by(10) {
+        st.step(now);
+    }
+    assert!(st.input_lost);
+    on.store(true, Ordering::SeqCst);
+    st.step(4_110);
+    assert!(!st.input_lost);
+}
+
+#[test]
+fn only_link_changes_are_logged() {
+    use std::sync::atomic::AtomicBool;
+    let mut st = bare_station(Switchable(Arc::new(AtomicBool::new(true))));
+    assert!(st.worth_logging("CONNECTED N0CALL W1AW-10 NARROW"));
+    assert!(st.worth_logging("BITRATE (9) 8055 BPS"));
+    assert!(!st.worth_logging("BITRATE (9) 8055 BPS"));
+    assert!(st.worth_logging("BITRATE (8) 7250 BPS"));
+    assert!(!st.worth_logging("BUFFER 120"));
+    assert!(!st.worth_logging("SN 24.1"));
+    assert!(st.worth_logging("DISCONNECTED"));
+    assert!(!st.worth_logging("DISCONNECTED"));
+    assert!(st.worth_logging("BITRATE (8) 7250 BPS"));
 }

@@ -64,13 +64,14 @@ struct RunArgs {
 
 #[derive(clap::Args, Clone)]
 struct SimArgs {
-    /// Command port of the first modem; the second modem's ports are 100 higher.
-    #[arg(long, default_value_t = 8300)]
+    /// Command port of the first modem; its data port is one up and its KISS port ten up.
+    /// The second modem's ports are 100 higher.
+    #[arg(long, default_value_t = 8300, value_parser = clap::value_parser!(u16).range(1..=65400))]
     port: u16,
     #[arg(long, value_enum)]
     profile: Option<ProfileArg>,
-    /// Channel SNR in dB, measured over the whole audio band.
-    #[arg(long, default_value_t = 30.0)]
+    /// Channel SNR in dB, measured over the whole audio band, from -10 to 60.
+    #[arg(long, default_value_t = 30.0, value_parser = snr_db)]
     snr: f32,
 }
 
@@ -101,6 +102,13 @@ fn apply(cfg: &mut Config, args: &RunArgs) {
     }
 }
 
+fn snr_db(text: &str) -> Result<f32, String> {
+    match text.parse::<f32>() {
+        Ok(db) if (-10.0..=60.0).contains(&db) => Ok(db),
+        _ => Err(format!("{text:?} is not a number of dB from -10 to 60")),
+    }
+}
+
 fn profile(cfg: &Config) -> Profile {
     match cfg.radio.profile {
         ProfileName::Narrow => Profile::Narrow,
@@ -126,6 +134,7 @@ struct Setup {
     port: u16,
     kiss_port: u16,
     name: String,
+    ptt_lines: bool,
 }
 
 fn start_station(cfg: &Config, setup: Setup) -> Result<station::Station> {
@@ -166,6 +175,7 @@ fn start_station(cfg: &Config, setup: Setup) -> Result<station::Station> {
         max_retries: cfg.host.max_retries,
         kiss_level: cfg.kiss.level,
         name: setup.name,
+        ptt_lines: setup.ptt_lines,
     };
     let io = station::StationIo {
         audio: setup.audio,
@@ -227,6 +237,7 @@ fn run(cfg: Config) -> Result<()> {
             port: cfg.host.port,
             kiss_port: cfg.kiss.port,
             name: String::new(),
+            ptt_lines: true,
         },
     )?;
     check_for_update(&cfg);
@@ -259,8 +270,9 @@ fn sim(cfg: Config, args: &SimArgs) -> Result<()> {
                 audio_ok: true,
                 ptt: Box::new(ptt::External),
                 port,
-                kiss_port: cfg.kiss.port + offset,
+                kiss_port: port + 10,
                 name: format!("[{port}] "),
+                ptt_lines: false,
             },
         )?);
     }
