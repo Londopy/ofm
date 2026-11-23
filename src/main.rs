@@ -1,6 +1,7 @@
 mod audio;
 mod calibrate;
 mod config;
+mod gui;
 mod host;
 mod kissport;
 mod launch;
@@ -34,6 +35,8 @@ struct Cli {
 enum Cmd {
     /// Start the modem (the default).
     Run(RunArgs),
+    /// Open the ofm window: the modem with its state, calibration and settings.
+    Gui,
     /// List audio devices.
     Devices,
     /// Send a level-setting tone and show the receive level.
@@ -233,7 +236,11 @@ fn main() -> Result<()> {
             };
             sim(load(&profile_only)?, &args)
         }),
+        Some(Cmd::Gui) => keying(gui::run),
         Some(Cmd::Run(args)) => keying(|| run(load(&args)?)),
+        #[cfg(windows)]
+        // a shortcut that passes flags such as --port wants the modem those flags describe
+        None if gui::launched_alone() && cli.run == RunArgs::default() => keying(gui::run),
         None => keying(|| run(load(&cli.run)?)),
     }
 }
