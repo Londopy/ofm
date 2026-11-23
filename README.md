@@ -55,8 +55,8 @@ scoop install londopy/ofm
 MSI for every user (admin): `msiexec /i ofm-<version>-x64.msi ALLUSERS=2 MSIINSTALLPERUSER=""`.
 Add `DESKTOPSHORTCUT=0` to skip the desktop shortcut or `ADDTOPATH=0` to leave PATH alone.
 
-The Start menu and desktop shortcuts open a terminal running `ofm`, which stays open when ofm
-exits so you can read any error.
+The Start menu and desktop shortcuts open the [ofm window](#the-ofm-window). From a terminal,
+`ofm run` starts the modem without it.
 
 ### Linux
 
@@ -88,6 +88,24 @@ and replaces itself. Nothing is installed without that y. The modem also checks 
 starts and prints a line if a newer version is out; set `check_on_start = false` under
 `[updater]` in the [config file](#configuration) to turn that off.
 
+## The ofm window
+
+![The ofm window during a link: connected to W1AW-10, speed level 9, the receive level inside its target band, and the log](docs/window.png)
+
+`ofm gui` (or the Start menu shortcut) opens a window around the same modem `ofm run` starts.
+
+- **Station** shows whether a link is up and with whom, the speed level and bit rate, SNR, how
+  many bytes Pat has sent that the other station has not acknowledged yet, whether the channel
+  is busy, and whether the radio is transmitting. The receive meter marks the range to aim for,
+  and the log lists connects, disconnects and speed changes in plain words.
+- **Calibrate** pauses the modem and keys the calibration tone, for setting deviation, with
+  transmit gain steps of 1 dB. A gain you have not saved is flagged until you save it.
+- **Settings** edits the sound cards, profile, TXDELAY, how the radio is keyed, and the ports.
+  Saving restarts the modem with them; a setting that can't work is explained next to it.
+
+The window follows the system's light or dark setting. Every control has a name for screen
+readers and can be reached from the keyboard.
+
 ## Use it with Pat
 
 1. Find your radio interface's sound card:
@@ -96,12 +114,13 @@ starts and prints a line if a newer version is out; set `check_on_start = false`
    ofm devices
    ```
 
-2. Set your levels. `ofm calibrate` sends a steady tone so you can set the deviation without a
-   service monitor, shows the receive level, and saves the transmit level you settle on.
-   Over-deviation is the most common reason an FM data link fails.
+2. Set your levels. `ofm calibrate` (or the window's Calibrate tab) sends a steady tone so you
+   can set the deviation without a service monitor, shows the receive level, and saves the
+   transmit level you settle on. Over-deviation is the most common reason an FM data link
+   fails.
 
-3. Start the modem. It listens for Pat on TCP port 8300 (commands) and 8301 (data). Part of a
-   device's name is enough:
+3. Start the modem, from the window or a terminal. It listens for Pat on TCP port 8300
+   (commands) and 8301 (data). From a terminal, part of a device's name is enough:
 
    ```
    ofm run --profile narrow --input "<input device>" --output "<output device>"
@@ -158,7 +177,8 @@ for a P2P test between two Pat instances, answer `c` to go on.
 
 | Command | What it does |
 |---|---|
-| `ofm` or `ofm run` | Starts the modem. `--port 8300` sets the command port (data is the next port up), `--kiss-port 8310` the KISS port, `--profile narrow\|wide` the speed profile, and `--input`/`--output` the audio devices. |
+| `ofm gui` | Opens the ofm window. A plain `ofm` started from Explorer or a shortcut does the same. |
+| `ofm` or `ofm run` | Starts the modem without a window. `--port 8300` sets the command port (data is the next port up), `--kiss-port 8310` the KISS port, `--profile narrow\|wide` the speed profile, and `--input`/`--output` the audio devices. |
 | `ofm devices` | Lists the audio devices. |
 | `ofm calibrate` | Sends a steady tone and shows the receive level. |
 | `ofm sim` | Runs two modems joined by a simulated radio link, on ports 8300 and 8400. |
