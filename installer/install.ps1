@@ -150,10 +150,9 @@ function Add-StartMenuShortcut {
     $lnk = Join-Path $programs "$AppName.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($lnk)
-    # ofm is a console program: cmd /k keeps the window open after it exits,
-    # and the doubled quotes survive cmd's quote stripping
-    $shortcut.TargetPath = $env:ComSpec
-    $shortcut.Arguments = "/k `"`"$Target`"`""
+    # opens the ofm window; the command line is there for anyone who types ofm
+    $shortcut.TargetPath = $Target
+    $shortcut.Arguments = "gui"
     $shortcut.IconLocation = "$Target,0"
     $shortcut.WorkingDirectory = Split-Path -Parent $Target
     $shortcut.Save()

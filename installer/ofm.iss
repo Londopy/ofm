@@ -6,8 +6,8 @@
 ;
 ; Output: installer\output\ofm-<version>-setup-x64.exe
 ;
-; ofm is a console program, so the shortcuts open a terminal running it, and
-; the install folder goes on PATH so client setup notes can just say "run ofm".
+; The shortcuts open the ofm window (`ofm gui`), and the install folder goes on
+; PATH so the command line (`ofm run`, `ofm calibrate`) works from any terminal.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -114,26 +114,23 @@ Source: "{#BinDir}\{#AppExeName}"; \
   Flags: ignoreversion
 
 [Icons]
-; cmd /k runs ofm and keeps the window open after it exits, so a startup
-; error stays readable instead of closing with the window. The doubled quotes
-; survive cmd's quote stripping when the path has spaces or parentheses.
 Name: "{group}\{#AppName}"; \
-  Filename: "{cmd}"; \
-  Parameters: "/k """"{app}\{#AppExeName}"""""; \
+  Filename: "{app}\{#AppExeName}"; \
+  Parameters: "gui"; \
   WorkingDir: "{app}"; \
   IconFilename: "{app}\{#AppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; \
-  Filename: "{cmd}"; \
-  Parameters: "/k """"{app}\{#AppExeName}"""""; \
+  Filename: "{app}\{#AppExeName}"; \
+  Parameters: "gui"; \
   WorkingDir: "{app}"; \
   IconFilename: "{app}\{#AppExeName}"; \
   Tasks: desktopicon
 
 [Run]
-; Offer to start ofm in a terminal after install (user can uncheck)
-Filename: "{cmd}"; \
-  Parameters: "/k """"{app}\{#AppExeName}"""""; \
+; Offer to open ofm after install (user can uncheck)
+Filename: "{app}\{#AppExeName}"; \
+  Parameters: "gui"; \
   WorkingDir: "{app}"; \
   Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; \
   Flags: nowait postinstall skipifsilent

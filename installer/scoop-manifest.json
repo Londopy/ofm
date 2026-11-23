@@ -1,5 +1,5 @@
 {
-    "##": "Copy to Londopy/scoop-bucket as bucket/ofm.json once v0.1.0 is published, adding \"hash\" from that release's SHA256SUMS.txt. The bucket's Excavator keeps it current after that.",
+    "##": "The live copy is bucket/ofm.json in Londopy/scoop-bucket. Its Excavator bumps the version and hash for each release; any other change made here has to be copied there by hand.",
     "version": "0.1.0",
     "description": "Open FM sound card modem with a VARA FM compatible host interface",
     "homepage": "https://github.com/Londopy/ofm",
@@ -8,13 +8,34 @@
     "extract_dir": "ofm",
     "architecture": {
         "64bit": {
-            "bin": "x64\\ofm.exe"
+            "bin": "x64\\ofm.exe",
+            "shortcuts": [
+                [
+                    "x64\\ofm.exe",
+                    "ofm",
+                    "gui"
+                ]
+            ]
         },
         "32bit": {
-            "bin": "x86\\ofm.exe"
+            "bin": "x86\\ofm.exe",
+            "shortcuts": [
+                [
+                    "x86\\ofm.exe",
+                    "ofm",
+                    "gui"
+                ]
+            ]
         },
         "arm64": {
-            "bin": "arm64\\ofm.exe"
+            "bin": "arm64\\ofm.exe",
+            "shortcuts": [
+                [
+                    "arm64\\ofm.exe",
+                    "ofm",
+                    "gui"
+                ]
+            ]
         }
     },
     "persist": [
