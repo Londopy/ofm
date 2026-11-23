@@ -8,6 +8,22 @@ what appears on its GitHub release page. Validated in CI by
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
+### Added
+
+- A window, opened with `ofm gui`, the Start menu shortcut, or a plain `ofm` started from
+  Explorer. It shows the link, speed level, SNR, unacknowledged bytes, busy channel, transmit
+  state, a receive meter with the range to aim for, and a log of link events. A Calibrate tab
+  keys the calibration tone and sets the transmit gain, and a Settings tab edits the sound
+  cards, profile, TXDELAY, PTT and ports and restarts the modem with them. It follows the
+  system's light or dark setting.
+
+### Changed
+
+- The Start menu and desktop shortcuts from the installers, the MSIs, `install.ps1` and Scoop
+  open the window instead of a terminal. `ofm run` still starts the modem without one.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
@@ -38,5 +54,6 @@ what appears on its GitHub release page. Validated in CI by
   arm64, portable exes and a portable zip, `install.ps1` and `install.cmd`, and a torrent for
   each. Plus a Linux x86_64 build.
 
-[Unreleased]: https://github.com/Londopy/ofm/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Londopy/ofm/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Londopy/ofm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Londopy/ofm/releases/tag/v0.1.0
