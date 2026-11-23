@@ -66,12 +66,15 @@ pub struct SoundCard {
     playback: Arc<Mutex<Playback>>,
 }
 
+// an exact name (what the window saves) wins over a part of one (what people type)
 fn find(devices: impl Iterator<Item = Device>, want: &str) -> Option<Device> {
     let want = want.to_ascii_lowercase();
-    devices.into_iter().find(|d| {
-        d.description()
-            .is_ok_and(|desc| desc.name().to_ascii_lowercase().contains(&want))
-    })
+    let named: Vec<(String, Device)> = devices
+        .map(|d| (device_name(&d).to_ascii_lowercase(), d))
+        .collect();
+    let exact = named.iter().position(|(n, _)| *n == want);
+    let index = exact.or_else(|| named.iter().position(|(n, _)| n.contains(&want)))?;
+    named.into_iter().nth(index).map(|(_, d)| d)
 }
 
 fn device_name(d: &Device) -> String {
@@ -80,30 +83,40 @@ fn device_name(d: &Device) -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
+/// The sound card names on this system, and which of them are the defaults.
+pub struct Devices {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub default_input: Option<String>,
+    pub default_output: Option<String>,
+}
+
+pub fn devices() -> Result<Devices> {
+    let host = cpal::default_host();
+    Ok(Devices {
+        inputs: host.input_devices()?.map(|d| device_name(&d)).collect(),
+        outputs: host.output_devices()?.map(|d| device_name(&d)).collect(),
+        default_input: host.default_input_device().map(|d| device_name(&d)),
+        default_output: host.default_output_device().map(|d| device_name(&d)),
+    })
+}
+
 /// Prints input and output devices for `ofm devices`.
 pub fn list() -> Result<()> {
-    let host = cpal::default_host();
-    let default_in = host.default_input_device().map(|d| device_name(&d));
-    let default_out = host.default_output_device().map(|d| device_name(&d));
-    println!("input devices:");
-    for d in host.input_devices()? {
-        let name = device_name(&d);
-        let mark = if Some(&name) == default_in.as_ref() {
-            " (default)"
-        } else {
-            ""
-        };
-        println!("  {name}{mark}");
-    }
-    println!("output devices:");
-    for d in host.output_devices()? {
-        let name = device_name(&d);
-        let mark = if Some(&name) == default_out.as_ref() {
-            " (default)"
-        } else {
-            ""
-        };
-        println!("  {name}{mark}");
+    let d = devices()?;
+    for (title, names, default) in [
+        ("input devices:", &d.inputs, &d.default_input),
+        ("output devices:", &d.outputs, &d.default_output),
+    ] {
+        println!("{title}");
+        for name in names {
+            let mark = if Some(name) == default.as_ref() {
+                " (default)"
+            } else {
+                ""
+            };
+            println!("  {name}{mark}");
+        }
     }
     Ok(())
 }

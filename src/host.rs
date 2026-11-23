@@ -2,9 +2,10 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 // commands are short; anything longer without a CR is junk
@@ -103,6 +104,13 @@ impl Port {
         self.0.lock().unwrap().is_some()
     }
 
+    // its reader thread sees the socket close and lets go of the client
+    fn close(&self) {
+        if let Some(s) = self.0.lock().unwrap().take() {
+            let _ = s.shutdown(Shutdown::Both);
+        }
+    }
+
     /// Sends one command-port line. Pat splits each read on CR without carrying partial
     /// lines over, so every line goes out in a single write.
     pub fn line(&self, text: &str) {
@@ -143,55 +151,162 @@ impl LineSplitter {
     }
 }
 
+/// A running server's sockets. Dropping it drops the clients and closes the listening ports,
+/// so the next modem (after a settings change in the window) can open them again.
+pub struct Listening {
+    closed: Arc<AtomicBool>,
+    close_clients: Box<dyn Fn() + Send>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl Listening {
+    pub fn new(closed: Arc<AtomicBool>, close_clients: impl Fn() + Send + 'static) -> Listening {
+        Listening {
+            closed,
+            close_clients: Box::new(close_clients),
+            threads: Vec::new(),
+        }
+    }
+
+    pub fn watch(&mut self, thread: JoinHandle<()>) {
+        self.threads.push(thread);
+    }
+}
+
+impl Drop for Listening {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+        (self.close_clients)();
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+    }
+}
+
+const ACCEPT_POLL: Duration = Duration::from_millis(50);
+
+/// Hands what a client sends to `each` until the client hangs up, `each` returns false, or
+/// `closed` is set. Reads time out now and then to look at `closed`: on Windows, shutting a
+/// socket down from another thread does not wake a read blocked on it.
+pub fn read_until_closed(
+    mut stream: TcpStream,
+    closed: &AtomicBool,
+    mut each: impl FnMut(&[u8]) -> bool,
+) {
+    if stream.set_read_timeout(Some(ACCEPT_POLL)).is_err() {
+        return;
+    }
+    let mut buf = [0u8; 4096];
+    while !closed.load(Ordering::SeqCst) {
+        match stream.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => {
+                if !each(&buf[..n]) {
+                    return;
+                }
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// Connections on `listener` until `closed` is set. The listener is polled rather than
+/// blocked on so that it can be closed; the connections it hands out block as usual.
+pub fn incoming(
+    listener: TcpListener,
+    closed: Arc<AtomicBool>,
+) -> io::Result<impl Iterator<Item = TcpStream>> {
+    listener.set_nonblocking(true)?;
+    Ok(std::iter::from_fn(move || loop {
+        if closed.load(Ordering::SeqCst) {
+            return None;
+        }
+        match listener.accept() {
+            Ok((s, _)) if s.set_nonblocking(false).is_ok() => return Some(s),
+            // a client that hung up before we got to it, or nobody waiting yet
+            _ => thread::sleep(ACCEPT_POLL),
+        }
+    }))
+}
+
 /// Binds the command port and the data port (command port + 1) and serves one client on
 /// each at a time. Returns the write handles for both.
-pub fn serve(cmd_port: u16, tx: Sender<HostInput>) -> io::Result<(Port, Port)> {
+pub fn serve(cmd_port: u16, tx: Sender<HostInput>) -> io::Result<(Port, Port, Listening)> {
+    let data_port = cmd_port.checked_add(1).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("command port {cmd_port} leaves no room for the data port above it"),
+        )
+    })?;
     let cmd = TcpListener::bind(("127.0.0.1", cmd_port))?;
-    let data = TcpListener::bind(("127.0.0.1", cmd_port + 1))?;
+    let data = TcpListener::bind(("127.0.0.1", data_port))?;
     let (cmd_out, data_out) = (Port::default(), Port::default());
+    let closed = Arc::new(AtomicBool::new(false));
+    let (c, d) = (cmd_out.clone(), data_out.clone());
+    let mut listening = Listening::new(closed.clone(), move || {
+        c.close();
+        d.close();
+    });
+    let cmd = incoming(cmd, closed.clone())?;
+    let data = incoming(data, closed.clone())?;
 
-    let (out, tx_cmd) = (cmd_out.clone(), tx.clone());
-    thread::spawn(move || {
-        for stream in cmd.incoming().flatten() {
+    let (out, tx_cmd, shut) = (cmd_out.clone(), tx.clone(), closed.clone());
+    listening.watch(thread::spawn(move || {
+        for stream in cmd {
             let Ok(write) = writer(&stream) else {
                 continue;
             };
             out.attach(write);
             let mut split = LineSplitter::default();
-            let mut buf = [0u8; 4096];
-            let mut reader = stream;
-            while let Ok(n @ 1..) = reader.read(&mut buf) {
-                for line in split.feed(&buf[..n]) {
-                    if tx_cmd.send(HostInput::Command(parse(&line))).is_err() {
-                        return;
-                    }
-                }
-            }
+            read_until_closed(stream, &shut, |bytes| {
+                split
+                    .feed(bytes)
+                    .into_iter()
+                    .all(|line| tx_cmd.send(HostInput::Command(parse(&line))).is_ok())
+            });
             out.detach();
             if tx_cmd.send(HostInput::Closed).is_err() {
                 return;
             }
         }
-    });
+    }));
 
     let out = data_out.clone();
-    thread::spawn(move || {
-        for stream in data.incoming().flatten() {
+    listening.watch(thread::spawn(move || {
+        for stream in data {
             let Ok(write) = writer(&stream) else {
                 continue;
             };
             out.attach(write);
-            let mut buf = [0u8; 4096];
-            let mut reader = stream;
-            while let Ok(n @ 1..) = reader.read(&mut buf) {
-                if tx.send(HostInput::Data(buf[..n].to_vec())).is_err() {
-                    return;
-                }
-            }
+            read_until_closed(stream, &closed, |bytes| {
+                tx.send(HostInput::Data(bytes.to_vec())).is_ok()
+            });
             out.detach();
         }
-    });
-    Ok((cmd_out, data_out))
+    }));
+    Ok((cmd_out, data_out, listening))
+}
+
+/// A test server on ports the OS says are free, and the command port it got. Fixed or
+/// derived port numbers collide with each other and with whatever else the machine runs.
+#[cfg(test)]
+pub fn serve_anywhere(tx: Sender<HostInput>) -> (u16, Port, Port, Listening) {
+    for _ in 0..50 {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .unwrap()
+            .port();
+        // the data port above it may be taken; then try another
+        if let Ok((cmd, data, listening)) = serve(port, tx.clone()) {
+            return (port, cmd, data, listening);
+        }
+    }
+    panic!("found no free pair of ports in 50 tries");
 }
 
 #[cfg(test)]
@@ -239,5 +354,39 @@ mod tests {
             s.feed(b"ION TEXT\rMYCALL N0CALL\r"),
             vec!["COMPRESSION TEXT", "MYCALL N0CALL"]
         );
+    }
+
+    #[test]
+    fn closing_a_server_drops_its_client_and_frees_the_ports() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (port, cmd, _data, listening) = serve_anywhere(tx);
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.write_all(b"VERSION\r").unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(HostInput::Command(Command::Version))
+        ));
+        assert!(cmd.is_attached());
+
+        drop(listening);
+        let mut buf = [0u8; 16];
+        // a reset counts as closed; a read that times out means the server never let go
+        let read = client.read(&mut buf);
+        assert!(
+            matches!(&read, Ok(0))
+                || matches!(&read, Err(e) if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                )),
+            "{read:?}"
+        );
+        assert!(!cmd.is_attached());
+        // the next modem can take the same ports straight away
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let again = serve(port, tx);
+        assert!(again.is_ok(), "{:?}", again.err());
     }
 }

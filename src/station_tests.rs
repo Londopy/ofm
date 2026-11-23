@@ -106,14 +106,14 @@ impl Client {
     }
 }
 
+// a station on free ports, and its command port
 fn station(
-    port: u16,
     side: usize,
     air: Arc<Mutex<[VecDeque<f32>; 2]>>,
     chan: ChannelConfig,
-) -> Station {
+) -> (Station, u16) {
     let (tx, rx) = channel();
-    let (cmd, data) = host::serve(port, tx).unwrap();
+    let (port, cmd, data, listening) = host::serve_anywhere(tx);
     let cfg = StationConfig {
         profile: Profile::Wide,
         txdelay_ms: 150,
@@ -139,8 +139,10 @@ fn station(
         cmd,
         data,
         kiss: None,
+        listening: vec![listening],
+        monitor: None,
     };
-    Station::new(cfg, io, side as u64 + 5)
+    (Station::new(cfg, io, side as u64 + 5), port)
 }
 
 fn pattern(n: usize, salt: u8) -> Vec<u8> {
@@ -149,19 +151,18 @@ fn pattern(n: usize, salt: u8) -> Vec<u8> {
 
 #[test]
 fn pat_session_over_simulated_radio() {
-    let base = 20_000 + (std::process::id() % 2000) as u16 * 4;
     let air = Arc::new(Mutex::new([VecDeque::new(), VecDeque::new()]));
     let mut chan = ChannelConfig::wide();
     chan.snr_db = Some(20.0);
     chan.clock_ppm = 80.0;
     chan.keyup_ms = 40.0;
-    let mut a = station(base, 0, air.clone(), chan.clone());
+    let (mut a, port_a) = station(0, air.clone(), chan.clone());
     chan.clock_ppm = -80.0;
     chan.seed = 2;
-    let mut b = station(base + 2, 1, air, chan);
+    let (mut b, port_b) = station(1, air, chan);
     let pat = thread::spawn(move || {
-        let mut pa = Client::connect(base);
-        let mut pb = Client::connect(base + 2);
+        let mut pa = Client::connect(port_a);
+        let mut pb = Client::connect(port_b);
         // pat-vara's startup sequence for varafm, written without waiting for replies
         pa.send("PUBLIC ON\rCOMPRESSION TEXT\rMYCALL N0CALL\rLISTEN OFF\r");
         pb.send("PUBLIC ON\rCOMPRESSION TEXT\rMYCALL W1AW-10\rLISTEN OFF\rLISTEN ON\r");
@@ -234,10 +235,9 @@ fn pat_session_over_simulated_radio() {
 
 #[test]
 fn answers_every_command_pat_might_send() {
-    let base = 24_000 + (std::process::id() % 2000) as u16 * 2;
     let air = Arc::new(Mutex::new([VecDeque::new(), VecDeque::new()]));
-    let mut st = station(base, 0, air, ChannelConfig::wide());
-    let mut p = Client::connect(base);
+    let (mut st, port) = station(0, air, ChannelConfig::wide());
+    let mut p = Client::connect(port);
     p.send("MYCALL N0CALL N0CALL-1\rCWID OFF\rBW2300\rWINLINK SESSION\rCHAT ON\rFROB\rCONNECT K1ABC W1AW\r");
     let end = Instant::now() + Duration::from_secs(5);
     while p.lines.lock().unwrap().len() < 8 && Instant::now() < end {
@@ -296,9 +296,8 @@ impl Ptt for FlakyPtt {
 
 #[test]
 fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
-    let base = 26_000 + (std::process::id() % 2000) as u16 * 2;
     let (tx, rx) = channel();
-    let (cmd, data) = host::serve(base, tx).unwrap();
+    let (_, cmd, data, listening) = host::serve_anywhere(tx);
     let log = Arc::new(Mutex::new(Vec::new()));
     let clock = Arc::new(Mutex::new(0u64));
     let ptt = FlakyPtt {
@@ -325,6 +324,8 @@ fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
         cmd,
         data,
         kiss: None,
+        listening: vec![listening],
+        monitor: None,
     };
     let mut st = Station::new(cfg, io, 9);
     st.link.set_mycalls(vec!["N0CALL".into()]);
@@ -346,14 +347,13 @@ fn ptt_is_released_when_the_output_stalls_and_the_first_release_fails() {
 #[test]
 fn narrow_link_carries_about_6_kbps_one_way() {
     use std::sync::atomic::{AtomicU64, Ordering};
-    let base = 28_000 + (std::process::id() % 1000) as u16 * 4;
     let air = Arc::new(Mutex::new([VecDeque::new(), VecDeque::new()]));
     let mut chan = ChannelConfig::narrow();
     chan.snr_db = Some(30.0);
     chan.clock_ppm = 50.0;
     chan.keyup_ms = 30.0;
-    let mk = |port, side, chan: ChannelConfig, air| {
-        let mut st = station(port, side, air, chan);
+    let mk = |side, chan: ChannelConfig, air| {
+        let (mut st, port) = station(side, air, chan);
         st.cfg.profile = Profile::Narrow;
         st.cfg.txdelay_ms = 200;
         st.rx = Receiver::new(Profile::Narrow);
@@ -365,17 +365,17 @@ fn narrow_link_carries_about_6_kbps_one_way() {
             },
             side as u64 + 5,
         );
-        st
+        (st, port)
     };
-    let mut a = mk(base, 0, chan.clone(), air.clone());
+    let (mut a, port_a) = mk(0, chan.clone(), air.clone());
     chan.clock_ppm = -50.0;
     chan.seed = 2;
-    let mut b = mk(base + 2, 1, chan, air);
+    let (mut b, port_b) = mk(1, chan, air);
     let clock = Arc::new(AtomicU64::new(0));
     let c2 = clock.clone();
     let pat = thread::spawn(move || {
-        let mut pa = Client::connect(base);
-        let mut pb = Client::connect(base + 2);
+        let mut pa = Client::connect(port_a);
+        let mut pb = Client::connect(port_b);
         pa.send("MYCALL N0CALL\r");
         pb.send("MYCALL W1AW-10\rLISTEN ON\r");
         pb.wait_for(|l| l == "REGISTERED W1AW-10", 5);
@@ -440,6 +440,8 @@ fn bare_station(audio: Switchable) -> Station {
         cmd: Port::default(),
         data: Port::default(),
         kiss: None,
+        listening: Vec::new(),
+        monitor: None,
     };
     Station::new(cfg, io, 1)
 }
@@ -479,4 +481,104 @@ fn only_link_changes_are_logged() {
     assert!(st.worth_logging("DISCONNECTED"));
     assert!(!st.worth_logging("DISCONNECTED"));
     assert!(st.worth_logging("BITRATE (8) 7250 BPS"));
+}
+
+// a station whose monitor channel is read by the test, with no host sockets
+fn watched_station(
+    audio: Box<dyn Audio>,
+    ptt_lines: bool,
+) -> (Station, std::sync::mpsc::Receiver<Monitor>) {
+    let (_tx, rx) = channel();
+    let (mtx, mrx) = channel();
+    let cfg = StationConfig {
+        profile: Profile::Narrow,
+        txdelay_ms: 150,
+        papr_db: 9.0,
+        tx_gain: 1.0,
+        cwid: false,
+        max_retries: 10,
+        kiss_level: 3,
+        name: String::new(),
+        ptt_lines,
+    };
+    let io = StationIo {
+        audio,
+        audio_ok: true,
+        ptt: Box::new(External),
+        host: rx,
+        cmd: Port::default(),
+        data: Port::default(),
+        kiss: None,
+        listening: Vec::new(),
+        monitor: Some(mtx),
+    };
+    (Station::new(cfg, io, 1), mrx)
+}
+
+fn levels(m: &std::sync::mpsc::Receiver<Monitor>) -> usize {
+    m.try_iter()
+        .filter(|m| matches!(m, Monitor::Level(_)))
+        .count()
+}
+
+#[test]
+fn the_window_hears_the_receive_level_ten_times_a_second_but_not_while_keyed() {
+    let (mut st, mon) = watched_station(Box::new(StuckAudio), false);
+    for now in (10..1_010).step_by(10) {
+        st.step(now);
+    }
+    let n = levels(&mon);
+    assert!((9..=11).contains(&n), "{n} level reports in a second");
+    // StuckAudio never finishes playing, so the station stays keyed until its slack runs out
+    st.tx_queue.push_back((vec![0.0; 4800], false));
+    st.step(1_010);
+    assert!(st.transmitting.is_some());
+    let _ = levels(&mon);
+    for now in (1_020..2_000).step_by(10) {
+        st.step(now);
+    }
+    assert_eq!(levels(&mon), 0, "level reported while keyed");
+}
+
+#[test]
+fn the_window_is_told_about_ptt_even_when_the_host_is_not() {
+    let (mut st, mon) = watched_station(Box::new(StuckAudio), false);
+    st.tx_queue.push_back((vec![0.0; 480], false));
+    for now in (10..3_000).step_by(10) {
+        st.step(now);
+    }
+    let ptt: Vec<String> = mon
+        .try_iter()
+        .filter_map(|m| match m {
+            Monitor::Line(l) if l.starts_with("PTT") => Some(l),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ptt, ["PTT ON", "PTT OFF"]);
+}
+
+#[test]
+fn log_lines_reach_the_window() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let on = Arc::new(AtomicBool::new(true));
+    let (mut st, mon) = watched_station(Box::new(Switchable(on.clone())), true);
+    for now in (10..1_000).step_by(10) {
+        st.step(now);
+    }
+    on.store(false, Ordering::SeqCst);
+    for now in (1_000..4_200).step_by(10) {
+        st.step(now);
+    }
+    let logs: Vec<String> = mon
+        .try_iter()
+        .filter_map(|m| match m {
+            Monitor::Log(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert!(
+        logs[0].contains("no audio from the input device"),
+        "{logs:?}"
+    );
 }

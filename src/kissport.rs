@@ -1,11 +1,12 @@
 // KISS over TCP for connectionless frames: every client can send, every client hears
 // every frame that passed its CRCs
 
-use crate::host::writer;
+use crate::host::{incoming, read_until_closed, writer, Listening};
 use crate::station::KissOut;
 use ofm_core::kiss;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -27,30 +28,35 @@ impl KissOut for Clients {
     }
 }
 
-pub fn serve(port: u16, tx: Sender<Vec<u8>>) -> io::Result<Clients> {
+pub fn serve(port: u16, tx: Sender<Vec<u8>>) -> io::Result<(Clients, Listening)> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let clients = Clients::default();
+    let closed = Arc::new(AtomicBool::new(false));
+    let all = clients.clone();
+    let mut listening = Listening::new(closed.clone(), move || {
+        for c in all.0.lock().unwrap().drain(..) {
+            let _ = c.shutdown(Shutdown::Both);
+        }
+    });
+    let streams = incoming(listener, closed.clone())?;
     let list = clients.clone();
-    thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
+    listening.watch(thread::spawn(move || {
+        for stream in streams {
             let Ok(write) = writer(&stream) else {
                 continue;
             };
             list.0.lock().unwrap().push(write);
-            let tx = tx.clone();
+            let (tx, closed) = (tx.clone(), closed.clone());
             thread::spawn(move || {
                 let mut decoder = kiss::Decoder::default();
-                let mut buf = [0u8; 4096];
-                let mut reader = stream;
-                while let Ok(n @ 1..) = reader.read(&mut buf) {
-                    for frame in decoder.feed(&buf[..n]) {
-                        if tx.send(frame).is_err() {
-                            return;
-                        }
-                    }
-                }
+                read_until_closed(stream, &closed, |bytes| {
+                    decoder
+                        .feed(bytes)
+                        .into_iter()
+                        .all(|frame| tx.send(frame).is_ok())
+                });
             });
         }
-    });
-    Ok(clients)
+    }));
+    Ok((clients, listening))
 }

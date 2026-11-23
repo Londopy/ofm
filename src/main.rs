@@ -3,20 +3,20 @@ mod calibrate;
 mod config;
 mod host;
 mod kissport;
+mod launch;
 mod ptt;
 mod sim;
 mod station;
 mod stop;
 mod updater;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use config::{Config, ProfileName, PttMethod};
+use config::{Config, ProfileName};
+use launch::{drive, open_ptt, profile, sound_card, start_station, Setup};
 use ofm_core::chansim::{Channel, ChannelConfig};
 use ofm_core::modem::Profile;
 use std::io::Write;
-use std::sync::mpsc::channel;
-use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(
@@ -44,7 +44,7 @@ enum Cmd {
     Update,
 }
 
-#[derive(clap::Args, Clone, Default)]
+#[derive(clap::Args, Clone, Default, PartialEq)]
 struct RunArgs {
     /// Command port; the data port is the next one up.
     #[arg(long)]
@@ -75,7 +75,7 @@ struct SimArgs {
     snr: f32,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum ProfileArg {
     Narrow,
     Wide,
@@ -109,103 +109,6 @@ fn snr_db(text: &str) -> Result<f32, String> {
     }
 }
 
-fn profile(cfg: &Config) -> Profile {
-    match cfg.radio.profile {
-        ProfileName::Narrow => Profile::Narrow,
-        ProfileName::Wide => Profile::Wide,
-    }
-}
-
-fn open_ptt(cfg: &Config) -> Result<Box<dyn ptt::Ptt>> {
-    let p = &cfg.ptt;
-    Ok(match p.method {
-        PttMethod::Client | PttMethod::Vox => Box::new(ptt::External),
-        PttMethod::Rts => Box::new(ptt::Serial::open(&p.serial_port, ptt::Line::Rts)?),
-        PttMethod::Dtr => Box::new(ptt::Serial::open(&p.serial_port, ptt::Line::Dtr)?),
-        PttMethod::Cm108 => Box::new(ptt::Cm108::open(p.cm108_path.as_deref(), p.cm108_gpio)?),
-        PttMethod::Rigctld => Box::new(ptt::Rigctld::connect(&p.rigctld)?),
-    })
-}
-
-struct Setup {
-    audio: Box<dyn station::Audio>,
-    audio_ok: bool,
-    ptt: Box<dyn ptt::Ptt>,
-    port: u16,
-    kiss_port: u16,
-    name: String,
-    ptt_lines: bool,
-}
-
-fn start_station(cfg: &Config, setup: Setup) -> Result<station::Station> {
-    let port = setup.port;
-    let (host_tx, host_rx) = channel();
-    let (cmd, data) = host::serve(port, host_tx)
-        .with_context(|| format!("opening ports {} and {}", port, port + 1))?;
-    let kiss = if cfg.kiss.enabled {
-        let (tx, rx) = channel();
-        let clients = kissport::serve(setup.kiss_port, tx)
-            .with_context(|| format!("opening KISS port {}", setup.kiss_port))?;
-        Some(station::Kiss {
-            inbox: rx,
-            out: Box::new(clients),
-        })
-    } else {
-        None
-    };
-    eprintln!(
-        "{}ofm {} {} profile, command port {}, data port {}{}",
-        setup.name,
-        env!("CARGO_PKG_VERSION"),
-        profile(cfg).name(),
-        port,
-        port + 1,
-        if cfg.kiss.enabled {
-            format!(", KISS port {}", setup.kiss_port)
-        } else {
-            String::new()
-        }
-    );
-    let station_cfg = station::StationConfig {
-        profile: profile(cfg),
-        txdelay_ms: cfg.radio.txdelay_ms,
-        papr_db: cfg.radio.papr_db,
-        tx_gain: cfg.audio.tx_gain,
-        cwid: cfg.radio.cwid,
-        max_retries: cfg.host.max_retries,
-        kiss_level: cfg.kiss.level,
-        name: setup.name,
-        ptt_lines: setup.ptt_lines,
-    };
-    let io = station::StationIo {
-        audio: setup.audio,
-        audio_ok: setup.audio_ok,
-        ptt: setup.ptt,
-        host: host_rx,
-        cmd,
-        data,
-        kiss,
-    };
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_nanos() as u64
-        ^ u64::from(port);
-    Ok(station::Station::new(station_cfg, io, seed))
-}
-
-// steps every station until ctrl-c; dropping them on the way out releases PTT
-fn drive(mut stations: Vec<station::Station>) {
-    let start = Instant::now();
-    while !stop::requested() {
-        let now = start.elapsed().as_millis() as u64;
-        for st in &mut stations {
-            st.step(now);
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    eprintln!("stopping");
-}
-
 fn check_for_update(cfg: &Config) {
     if cfg.updater.check_on_start {
         std::thread::spawn(|| {
@@ -220,28 +123,23 @@ fn check_for_update(cfg: &Config) {
 }
 
 fn run(cfg: Config) -> Result<()> {
-    let (audio, audio_ok): (Box<dyn station::Audio>, bool) =
-        match audio::SoundCard::open(cfg.audio.input.as_deref(), cfg.audio.output.as_deref()) {
-            Ok(card) => (Box::new(card), true),
-            Err(e) => {
-                eprintln!("no sound card: {e:#}");
-                (Box::new(audio::NoAudio), false)
-            }
-        };
+    let (audio, problem) = sound_card(&cfg);
     let st = start_station(
         &cfg,
         Setup {
             audio,
-            audio_ok,
+            audio_ok: problem.is_none(),
             ptt: open_ptt(&cfg)?,
             port: cfg.host.port,
             kiss_port: cfg.kiss.port,
             name: String::new(),
             ptt_lines: true,
+            monitor: None,
         },
     )?;
     check_for_update(&cfg);
-    drive(vec![st]);
+    drive(vec![st], stop::requested);
+    eprintln!("stopping");
     Ok(())
 }
 
@@ -273,11 +171,13 @@ fn sim(cfg: Config, args: &SimArgs) -> Result<()> {
                 kiss_port: port + 10,
                 name: format!("[{port}] "),
                 ptt_lines: false,
+                monitor: None,
             },
         )?);
     }
     eprintln!("simulated radio link at {} dB SNR; ctrl-c stops", args.snr);
-    drive(stations);
+    drive(stations, stop::requested);
+    eprintln!("stopping");
     Ok(())
 }
 

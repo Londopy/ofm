@@ -1,12 +1,12 @@
 // the modem's main loop: audio in, receiver, link, audio out, and the host ports
 
-use crate::host::{Command, HostInput, Port};
+use crate::host::{Command, HostInput, Listening, Port};
 use crate::ptt::Ptt;
 use ofm_core::arq::{HostEvent, Link, LinkConfig, Out, Sense};
 use ofm_core::kiss;
 use ofm_core::modem::{build_frame, lead_in, Chunk, Header, Kind, Profile, Receiver, RxEvent, FS};
 use std::collections::VecDeque;
-use std::sync::mpsc::Receiver as Inbox;
+use std::sync::mpsc::{Receiver as Inbox, Sender};
 
 const ALIVE_MS: u64 = 60_000;
 const CW_WPM: f32 = 20.0;
@@ -17,6 +17,7 @@ const UNKEY_RETRY_MS: u64 = 1000;
 const INPUT_LOST_MS: u64 = 3000;
 // a CW ID still waiting for a quiet channel after this long is dropped
 const CW_EXPIRE_MS: u64 = 30_000;
+const LEVEL_EVERY_MS: u64 = 100;
 
 /// Sound card side as the station sees it, 48 kHz mono.
 pub trait Audio {
@@ -43,6 +44,20 @@ pub struct StationConfig {
     /// Tell the host PTT ON and PTT OFF. Off in `ofm sim`, where a client set up to key a
     /// real radio on those lines would transmit every simulated frame.
     pub ptt_lines: bool,
+}
+
+/// What a station tells a window that watches it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Monitor {
+    /// A line for the host, as Pat sees it. PTT lines come here even when the host is not
+    /// sent them.
+    Line(String),
+    /// A line the station logged.
+    Log(String),
+    /// RMS of the audio just captured, 0 to 1.
+    Level(f32),
+    /// The host's command connection closed.
+    ClientLeft,
 }
 
 /// Write side of the KISS clients.
@@ -76,6 +91,10 @@ pub struct Station {
     busy: bool,
     last_alive: u64,
     warned: bool,
+    monitor: Option<Sender<Monitor>>,
+    last_level: u64,
+    // dropped last, after Drop has released PTT
+    _listening: Vec<Listening>,
 }
 
 struct Keyed {
@@ -99,6 +118,9 @@ pub struct StationIo {
     pub cmd: Port,
     pub data: Port,
     pub kiss: Option<Kiss>,
+    /// The servers behind `cmd`, `data` and the KISS port; they close with the station.
+    pub listening: Vec<Listening>,
+    pub monitor: Option<Sender<Monitor>>,
 }
 
 impl Station {
@@ -135,6 +157,9 @@ impl Station {
             busy: false,
             last_alive: 0,
             warned: false,
+            monitor: io.monitor,
+            last_level: 0,
+            _listening: io.listening,
         }
     }
 
@@ -149,7 +174,7 @@ impl Station {
             }
         }
         if !self.audio_ok && !self.warned && self.cmd.is_attached() {
-            self.cmd.line("MISSING SOUNDCARD");
+            self.tell("MISSING SOUNDCARD");
             self.warned = true;
         }
 
@@ -158,19 +183,21 @@ impl Station {
         }
         let heard = self.audio.capture();
         self.watch_input(now, heard.is_empty());
+        // while keyed the radio's receive audio is muted or is our own signal
+        let keyed = self.transmitting.is_some();
+        if !keyed && !heard.is_empty() && now >= self.last_level + LEVEL_EVERY_MS {
+            self.last_level = now;
+            let rms = (heard.iter().map(|x| x * x).sum::<f32>() / heard.len() as f32).sqrt();
+            self.watched(Monitor::Level(rms));
+        }
         match &self.transmitting {
             Some(k) if !self.audio.playing() || now >= k.until => {
                 if self.audio.playing() {
-                    eprintln!(
-                        "{}audio output stopped mid transmission; dropping PTT",
-                        self.cfg.name
-                    );
+                    self.log("audio output stopped mid transmission; dropping PTT");
                 }
                 let from_link = k.from_link;
                 self.unkey(now);
-                if self.cfg.ptt_lines {
-                    self.cmd.line("PTT OFF");
-                }
+                self.ptt_line(false);
                 self.transmitting = None;
                 // whatever we captured while keyed was our own signal
                 self.rx.clear();
@@ -197,7 +224,7 @@ impl Station {
         let busy = self.rx.busy();
         if busy != self.busy {
             self.busy = busy;
-            self.cmd.line(if busy { "BUSY ON" } else { "BUSY OFF" });
+            self.tell(if busy { "BUSY ON" } else { "BUSY OFF" });
         }
         let keyed = self.transmitting.is_some();
         let sense = Sense {
@@ -214,7 +241,7 @@ impl Station {
 
         if now >= self.last_alive + ALIVE_MS {
             self.last_alive = now;
-            self.cmd.line("IAMALIVE");
+            self.tell("IAMALIVE");
         }
     }
 
@@ -225,6 +252,7 @@ impl Station {
                 self.link.abort();
                 self.link.set_listen(false);
                 self.warned = false;
+                self.watched(Monitor::ClientLeft);
             }
             HostInput::Command(c) => self.on_command(now, c),
         }
@@ -233,42 +261,41 @@ impl Station {
     fn on_command(&mut self, now: u64, c: Command) {
         match c {
             Command::MyCall(calls) => {
-                self.cmd.line("OK");
-                self.cmd.line(&format!("REGISTERED {}", calls[0]));
+                self.tell("OK");
+                self.tell(&format!("REGISTERED {}", calls[0]));
                 self.mycalls = calls.clone();
                 self.link.set_mycalls(calls);
             }
             Command::Listen(on) => {
-                self.cmd.line("OK");
+                self.tell("OK");
                 self.link.set_listen(on);
             }
             Command::Connect { src, dst } => {
                 if self.mycalls.iter().any(|c| c.eq_ignore_ascii_case(&src)) {
-                    self.cmd.line("OK");
+                    self.tell("OK");
                     self.link.connect(now, &src, &dst);
                 } else {
-                    self.cmd.line("WRONG");
+                    self.tell("WRONG");
                 }
             }
             Command::Disconnect => {
-                self.cmd.line("OK");
+                self.tell("OK");
                 self.link.disconnect(now);
             }
             Command::Abort => {
-                self.cmd.line("OK");
+                self.tell("OK");
                 self.link.abort();
                 self.tx_queue.clear();
             }
             Command::CwId(on) => {
                 self.cfg.cwid = on;
-                self.cmd.line("OK");
+                self.tell("OK");
             }
             Command::Version => {
-                self.cmd
-                    .line(&format!("VERSION ofm {}", env!("CARGO_PKG_VERSION")));
+                self.tell(&format!("VERSION ofm {}", env!("CARGO_PKG_VERSION")));
             }
-            Command::Compression | Command::Public | Command::Ignored => self.cmd.line("OK"),
-            Command::Wrong => self.cmd.line("WRONG"),
+            Command::Compression | Command::Public | Command::Ignored => self.tell("OK"),
+            Command::Wrong => self.tell("WRONG"),
         }
     }
 
@@ -279,17 +306,18 @@ impl Station {
         }
         if !empty {
             if self.input_lost {
-                eprintln!("{}audio from the input device is back", self.cfg.name);
+                self.log("audio from the input device is back");
                 self.input_lost = false;
             }
             self.last_input = now;
         } else if !self.input_lost && now >= self.last_input + INPUT_LOST_MS {
-            eprintln!(
-                "{}no audio from the input device for {} s; check that it is still plugged in",
-                self.cfg.name,
+            self.log(&format!(
+                "no audio from the input device for {} s; check that it is still plugged in",
                 INPUT_LOST_MS / 1000
-            );
+            ));
             self.input_lost = true;
+            // the meter would otherwise go on showing the last level it heard
+            self.watched(Monitor::Level(0.0));
         }
     }
 
@@ -297,7 +325,7 @@ impl Station {
         match self.ptt.set(false) {
             Ok(()) => self.unkey_at = None,
             Err(e) => {
-                eprintln!("{}ptt off failed, trying again: {e}", self.cfg.name);
+                self.log(&format!("ptt off failed, trying again: {e}"));
                 self.unkey_at = Some(now + UNKEY_RETRY_MS);
             }
         }
@@ -338,9 +366,34 @@ impl Station {
             }
         };
         if self.worth_logging(&line) {
-            eprintln!("{}{line}", self.cfg.name);
+            self.log(&line);
         }
-        self.cmd.line(&line);
+        self.tell(&line);
+    }
+
+    fn tell(&self, line: &str) {
+        self.cmd.line(line);
+        self.watched(Monitor::Line(line.to_string()));
+    }
+
+    fn ptt_line(&self, on: bool) {
+        let line = if on { "PTT ON" } else { "PTT OFF" };
+        if self.cfg.ptt_lines {
+            self.cmd.line(line);
+        }
+        self.watched(Monitor::Line(line.to_string()));
+    }
+
+    fn log(&self, text: &str) {
+        eprintln!("{}{text}", self.cfg.name);
+        self.watched(Monitor::Log(text.to_string()));
+    }
+
+    fn watched(&self, m: Monitor) {
+        if let Some(tx) = &self.monitor {
+            // a window that has closed no longer needs to hear
+            let _ = tx.send(m);
+        }
     }
 
     // link changes, not the per-frame chatter, and nothing twice in a row (the speed is
@@ -377,11 +430,10 @@ impl Station {
                     let audio = self.frames_audio(&[frame]);
                     self.tx_queue.push_back((audio, false));
                 }
-                None => eprintln!(
-                    "{}kiss frame of {} bytes is too big for one frame",
-                    self.cfg.name,
+                None => self.log(&format!(
+                    "kiss frame of {} bytes is too big for one frame",
                     payload.len()
-                ),
+                )),
             }
         }
     }
@@ -408,12 +460,10 @@ impl Station {
             return;
         };
         if let Err(e) = self.ptt.set(true) {
-            eprintln!("{}ptt on failed: {e}", self.cfg.name);
+            self.log(&format!("ptt on failed: {e}"));
         }
         self.unkey_at = None;
-        if self.cfg.ptt_lines {
-            self.cmd.line("PTT ON");
-        }
+        self.ptt_line(true);
         let until = now + (audio.len() * 1000 / FS) as u64 + TX_SLACK_MS;
         let gain = self.cfg.tx_gain;
         self.audio.play(
@@ -431,7 +481,7 @@ impl Drop for Station {
     fn drop(&mut self) {
         if self.transmitting.is_some() || self.unkey_at.is_some() {
             if let Err(e) = self.ptt.set(false) {
-                eprintln!("{}ptt off failed on exit: {e}", self.cfg.name);
+                self.log(&format!("ptt off failed on exit: {e}"));
             }
         }
     }
