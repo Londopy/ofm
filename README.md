@@ -1,24 +1,73 @@
-# ofm
+<p align="center">
+  <img src="assets/ofm.png" width="112" alt="The ofm icon: radio waves spreading from a dot on a dark green square">
+</p>
 
-[![CI](https://github.com/Londopy/ofm/actions/workflows/ci.yml/badge.svg)](https://github.com/Londopy/ofm/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Londopy/ofm)](https://github.com/Londopy/ofm/releases/latest)
-[![changelog](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Londopy/ofm/gh-pages/changelog-badge.json)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+<h1 align="center">ofm</h1>
 
-**An open source sound card modem for FM radios that Pat can use in place of VARA FM.**
+<p align="center">
+  <b>An open source sound card modem for FM radios that Pat can use in place of VARA FM.</b>
+</p>
 
-ofm is a modem for VHF/UHF FM radios. Toward Winlink clients it looks like VARA FM: the same
-two TCP ports and the same text commands, so Pat connects to it as `varafm://` with no changes
-on Pat's side. On the air it uses its own open OFDM waveform, so an ofm station talks only to
-other ofm stations.
+<p align="center">
+  <a href="https://github.com/Londopy/ofm/actions/workflows/ci.yml"><img src="https://github.com/Londopy/ofm/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Londopy/ofm/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/Londopy/ofm/release.yml?label=release%20build" alt="Release build"></a>
+  <a href="https://github.com/Londopy/ofm/releases/latest"><img src="https://img.shields.io/github/v/release/Londopy/ofm" alt="Latest release"></a>
+  <a href="https://github.com/Londopy/ofm/releases/latest"><img src="https://img.shields.io/github/release-date/Londopy/ofm" alt="Release date"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Londopy/ofm/gh-pages/changelog-badge.json" alt="Changelog"></a>
+  <br>
+  <a href="https://github.com/Londopy/ofm/releases"><img src="https://img.shields.io/github/downloads/Londopy/ofm/total" alt="Downloads"></a>
+  <a href="#install"><img src="https://img.shields.io/scoop/v/ofm?bucket=https://github.com/Londopy/scoop-bucket" alt="Scoop"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2f6b4f" alt="Platforms: Windows and Linux"></a>
+  <a href="https://github.com/Londopy/ofm"><img src="https://img.shields.io/github/languages/top/Londopy/ofm" alt="Top language"></a>
+  <a href="#use-it-with-pat"><img src="https://img.shields.io/badge/Pat-varafm%3A%2F%2F-c98a1b" alt="Works with Pat as varafm://"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0"></a>
+</p>
 
-## Status
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#use-it-with-pat">Use it with Pat</a> ·
+  <a href="#try-it-without-radios">Try it without radios</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="docs/waveform.md">Waveform</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-ofm is early work and has not been tested on the air yet. It has been tested in a channel
-simulator, between two instances over a virtual audio cable, and with real Pat (1.0.1) holding
-Winlink P2P sessions in both directions through [`ofm sim`](#try-it-without-radios). The
-waveform, framing and link protocol are documented in full in [docs/waveform.md](docs/waveform.md),
-but the format is not frozen yet, so run the same ofm version at both ends of a link.
+<p align="center">
+  <img src="docs/window.gif" width="760" alt="The ofm window going from waiting, to connecting, to a link with W1AW-10 at speed level 9 (8055 bps raw) while the bytes waiting for acknowledgement count down, then disconnected">
+  <br>
+  <sub>A real two-way 26 KB transfer between two ofm modems over a virtual audio cable, sped up 2x. Test callsigns, no radios.</sub>
+</p>
+
+ofm is a modem for VHF/UHF FM radios. 📻 Toward Winlink clients it looks like VARA FM: the
+same two TCP ports and the same text commands, so Pat connects to it as `varafm://` with no
+changes on Pat's side. On the air it uses its own open OFDM waveform, so an ofm station talks
+only to other ofm stations.
+
+| | |
+|---|---|
+| **Host interface** | VARA FM compatible: commands on TCP 8300, data on 8301, plus KISS over TCP on 8310 |
+| **Waveform** | Open OFDM with 802.11n LDPC and ARQ, documented in full in [docs/waveform.md](docs/waveform.md) |
+| **Speed** | Ten levels, adapting to the link; 6.0 kbps (Narrow) and 12.0 kbps (Wide) measured over a virtual cable |
+| **Keying** | Pat with rigctld, VOX, or ofm itself through serial RTS/DTR, a CM108 GPIO or rigctld |
+| **Ways to run it** | A window (`ofm gui`), a terminal (`ofm run`), or `ofm sim` with no radio at all |
+
+> [!WARNING]
+> ofm is early work and **has not been tested on the air yet**. It has been tested in a channel
+> simulator, between two instances over a virtual audio cable, and with real Pat (1.0.1) holding
+> Winlink P2P sessions in both directions through [`ofm sim`](#try-it-without-radios). The
+> waveform format is not frozen yet, so run the same ofm version at both ends of a link.
+
+## Quick start
+
+```powershell
+scoop bucket add londopy https://github.com/Londopy/scoop-bucket
+scoop install londopy/ofm
+ofm gui
+```
+
+Pick your radio interface's sound card under **Settings**, set your deviation under
+**Calibrate**, then point Pat's `varafm` address at `127.0.0.1:8300`. The [Pat section](#use-it-with-pat)
+walks through it step by step.
 
 ## Install
 
@@ -41,10 +90,6 @@ PowerShell one-liner:
 irm https://github.com/Londopy/ofm/releases/latest/download/install.ps1 | iex
 ```
 
-Options: `-Msi`, `-Portable` (add `-AddToPath` to put it on PATH), `-AllUsers`,
-`-Version 1.2.3`. To pass them, run the script as a block:
-`& ([scriptblock]::Create((irm https://github.com/Londopy/ofm/releases/latest/download/install.ps1))) -Portable -AddToPath`
-
 Scoop:
 
 ```powershell
@@ -52,11 +97,23 @@ scoop bucket add londopy https://github.com/Londopy/scoop-bucket
 scoop install londopy/ofm
 ```
 
+The Start menu and desktop shortcuts open the [ofm window](#the-ofm-window). From a terminal,
+`ofm run` starts the modem without it.
+
+<details>
+<summary>Script options and machine-wide MSI installs</summary>
+
+`install.ps1` takes `-Msi`, `-Portable` (add `-AddToPath` to put it on PATH), `-AllUsers` and
+`-Version 1.2.3`. To pass them, run the script as a block:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/Londopy/ofm/releases/latest/download/install.ps1))) -Portable -AddToPath
+```
+
 MSI for every user (admin): `msiexec /i ofm-<version>-x64.msi ALLUSERS=2 MSIINSTALLPERUSER=""`.
 Add `DESKTOPSHORTCUT=0` to skip the desktop shortcut or `ADDTOPATH=0` to leave PATH alone.
 
-The Start menu and desktop shortcuts open the [ofm window](#the-ofm-window). From a terminal,
-`ofm run` starts the modem without it.
+</details>
 
 ### Linux
 
@@ -90,18 +147,19 @@ starts and prints a line if a newer version is out; set `check_on_start = false`
 
 ## The ofm window
 
-![The ofm window during a link: connected to W1AW-10, speed level 9, the receive level inside its target band, and the log](docs/window.png)
-
 `ofm gui` (or the Start menu shortcut) opens a window around the same modem `ofm run` starts.
 
-- **Station** shows whether a link is up and with whom, the speed level and bit rate, SNR, how
-  many bytes Pat has sent that the other station has not acknowledged yet, whether the channel
-  is busy, and whether the radio is transmitting. The receive meter marks the range to aim for,
-  and the log lists connects, disconnects and speed changes in plain words.
-- **Calibrate** pauses the modem and keys the calibration tone, for setting deviation, with
-  transmit gain steps of 1 dB. A gain you have not saved is flagged until you save it.
-- **Settings** edits the sound cards, profile, TXDELAY, how the radio is keyed, and the ports.
-  Saving restarts the modem with them; a setting that can't work is explained next to it.
+| Tab | What it's for |
+|---|---|
+| **Station** | Whether a link is up and with whom, the speed level and bit rate, SNR, how many bytes Pat has sent that the other station has not acknowledged yet, whether the channel is busy, and whether the radio is transmitting. The receive meter marks the range to aim for, and the log lists connects, disconnects and speed changes in plain words. |
+| **Calibrate** | Pauses the modem and keys the calibration tone, for setting deviation, with transmit gain steps of 1 dB. A gain you have not saved is flagged until you save it. |
+| **Settings** | Edits the sound cards, profile, TXDELAY, how the radio is keyed, and the ports. Saving restarts the modem with them; a setting that can't work is explained next to it. |
+
+<details>
+<summary>Screenshot of the Settings tab</summary>
+<br>
+<img src="docs/settings.png" width="760" alt="The Settings tab: sound card input and output, Narrow or Wide profile, keyup delay of 200 ms, CW ID, keying by the client, and the command and KISS ports">
+</details>
 
 The window follows the system's light or dark setting. Every control has a name for screen
 readers and can be reached from the keyboard.
@@ -159,7 +217,7 @@ a change of speed level, or an input device that has stopped sending audio.
 `ofm sim` runs two modems in one process, joined by a simulated FM radio link in real time.
 The first modem takes Pat on ports 8300 and 8301 and the second on 8400 and 8401, so two Pat
 instances (or Pat and another VARA FM client) can hold a whole session with no radio or sound
-card:
+card: 🧪
 
 ```
 ofm sim --profile narrow --snr 25
@@ -196,11 +254,18 @@ middle of a transmission.
 | Wide | the flat 9600-baud discriminator port | about 310 to 4750 Hz | 17.2 kbps | 12.0 kbps |
 
 ofm adapts its speed to the link across ten levels, from about 400 bps (Narrow) or 860 bps
-(Wide) up to the top level. "Measured" is the net rate of a 100 KB one-way transfer between two
-ofm instances in real time over VB-Audio Virtual Cable, timed from just after the connect, with
-200 ms TXDELAY, headers, acknowledgements and turnarounds all included. Real radios add noise,
-filtering and slower keyup, so expect less on the air; nothing has been measured there yet. [docs/curves.md](docs/curves.md) has error rate and throughput
-for every level in the channel simulator.
+(Wide) up to the top level. [docs/curves.md](docs/curves.md) has error rate and throughput for
+every level in the channel simulator.
+
+<details>
+<summary>How "measured" was measured</summary>
+
+"Measured" is the net rate of a 100 KB one-way transfer between two ofm instances in real time
+over VB-Audio Virtual Cable, timed from just after the connect, with 200 ms TXDELAY, headers,
+acknowledgements and turnarounds all included. Real radios add noise, filtering and slower
+keyup, so expect less on the air; nothing has been measured there yet.
+
+</details>
 
 ## Configuration
 
@@ -233,22 +298,26 @@ cargo build --release
 On Linux, install the ALSA and udev headers first
 (`sudo apt install libasound2-dev libudev-dev pkg-config` on Debian and Ubuntu).
 
-Installers: [Inno Setup 6](https://jrsoftware.org/isinfo.php) builds the setup.exe
+<details>
+<summary>Installers and repo layout</summary>
+
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) builds the setup.exe
 (`ISCC.exe /DAppVersion=0.1.0 installer\ofm.iss`) and [WiX v7](https://wixtoolset.org) builds
 the MSIs; `.github/workflows/release.yml` has the exact commands.
-
-## Layout
 
 ```
 src/              the ofm program
 crates/ofm-core/  waveform, LDPC, framing and ARQ
 installer/        Inno Setup (.iss) and WiX (.wxs) scripts, install.ps1/.cmd, Scoop manifest
 scripts/          release_notes.py (release page, checksums, torrents)
+docs/             waveform spec, simulator curves, README images
 ```
+
+</details>
 
 ## Contributing
 
-Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). A pull request
+Issues and pull requests are welcome 🙌; see [CONTRIBUTING.md](CONTRIBUTING.md). A pull request
 that changes the waveform, framing or ARQ also updates `docs/waveform.md`.
 
 ## License
